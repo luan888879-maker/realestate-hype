@@ -3,3 +3,4 @@ requests
 google-genai
 Pillow
 beautifulsoup4
+cloudscraper
