@@ -45,13 +45,22 @@ if st.button("Run Intrinsic Valuation"):
             if not scrape_result.get("success"):
                 st.error(f"⚠️ {scrape_result.get('error')}")
             else:
-                target_image_url = scrape_result["image_url"]
+                # Extract the dynamic data from our new scraper
+                images = scrape_result.get("image_urls", [])
+                main_image_url = images[0] if images else None
+                address = scrape_result.get("address", "Unknown Address")
+                asking_price_str = scrape_result.get("formatted_price", "Price not listed")
                 
-                # Show the user the photo we successfully grabbed!
-                st.image(target_image_url, caption="Target Property Acquired", use_column_width=True)
+                # UI UPDATE: Display the real property address
+                st.subheader(f"📍 {address}")
+                
+                # Show the primary cover photo
+                if main_image_url:
+                    st.image(main_image_url, caption=f"Primary Image - {address}", use_column_width=True)
                 
                 # 2. RUN THE AI VISION ENGINE
-                vision_result = analyze_image_url(target_image_url, api_key)
+                # Note: We are passing the first image for now until we upgrade the AI engine
+                vision_result = analyze_image_url(main_image_url, api_key)
                 
                 score = vision_result.get("condition_score", "N/A")
                 needs_reno = vision_result.get("needs_cosmetic_renovation", True)
@@ -63,14 +72,16 @@ if st.button("Run Intrinsic Valuation"):
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    # These math figures are still hardcoded placeholders until we wire up valuation_engine.py next!
-                    st.metric(label="Asking Price (Hype)", value="$1,500,000") 
+                    # UI UPDATE: Inject the real scraped asking price!
+                    st.metric(label="Asking Price (Hype)", value=asking_price_str) 
+                    
+                    # These two math figures are the final placeholders left
                     st.metric(label="True Land Value", value="$1,100,000")
                     st.metric(label="Land-to-Asset Ratio", value="73%")
                     
                 with col2:
                     st.metric(label="AI Condition Score", value=f"{score} / 10")
-                    st.metric(label="Hype Premium", value="$150,000", delta="-Overpriced", delta_color="inverse")
+                    st.metric(label="Hype Premium", value="Pending Math", delta="-Overpriced", delta_color="inverse")
                 
                 st.markdown("---")
                 st.write("### 🤖 AI Inspector Notes")
