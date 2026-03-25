@@ -6,15 +6,12 @@ from vision_model import analyze_image_url
 st.set_page_config(page_title="Hype vs Hardware", page_icon="🏢", layout="centered")
 
 # --- SECURE SETTINGS & API VAULT ---
-# First, try to grab the key securely from Streamlit Secrets
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
+    domain_api_key = st.secrets["DOMAIN_API_KEY"]
 except (KeyError, FileNotFoundError):
-    # If the secret isn't found, fallback to asking the user
-    with st.sidebar:
-        st.header("⚙️ Engine Settings")
-        api_key = st.text_input("Google Gemini API Key:", type="password")
-        st.markdown("*Required to run the AI Vision model.*")
+    st.error("⚠️ API Keys missing from Streamlit Secrets. Please check your cloud settings.")
+    st.stop()
 
 # --- MAIN DASHBOARD ---
 st.title("🏢 Hype vs. Hardware")
