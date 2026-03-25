@@ -1,35 +1,55 @@
 import requests
 import re
 
-def fetch_property_data(url: str, domain_api_key: str) -> dict:
-    """Fetches structured property data using the official Domain API."""
+def fetch_property_data(url: str, client_id: str, client_secret: str) -> dict:
+    """Fetches property data using Domain's Official OAuth2 API Flow."""
     
-    # 1. Extract the Listing ID from the end of the URL
+    # 1. Extract the Listing ID from the URL
     try:
         match = re.search(r'-([0-9]+)/?$', url.strip())
         if not match:
-            return {"success": False, "error": "Could not extract Listing ID from the URL. Please ensure it is a valid Domain listing link."}
+            return {"success": False, "error": "Could not extract Listing ID from the URL."}
         listing_id = match.group(1)
     except Exception as e:
         return {"success": False, "error": f"URL Parsing Error: {str(e)}"}
 
-    # 2. Call the Official Domain API
+    # --- THE FIX: STEP 2 - OAUTH2 AUTHENTICATION ---
+    auth_url = "https://auth.domain.com.au/v1/connect/token"
+    auth_data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "client_credentials",
+        "scope": "api_listings_read" # We specifically ask for permission to read listings
+    }
+    
+    try:
+        # Ask the security server for a temporary token
+        auth_response = requests.post(auth_url, data=auth_data)
+        if auth_response.status_code != 200:
+             return {"success": False, "error": f"OAuth2 Failed: Domain rejected your Client ID/Secret. Status: {auth_response.status_code}"}
+             
+        access_token = auth_response.json().get("access_token")
+    except Exception as e:
+        return {"success": False, "error": f"Domain Security Server Error: {str(e)}"}
+
+    # --- STEP 3: FETCH THE DATA WITH THE BEARER TOKEN ---
     endpoint = f"https://api.domain.com.au/v1/listings/{listing_id}"
-    headers = {"X-Api-Key": domain_api_key}
+    
+    # We pass the temporary token as a "Bearer" header
+    headers = {
+        "Authorization": f"Bearer {access_token}"
+    }
     
     try:
         response = requests.get(endpoint, headers=headers, timeout=10.0)
         
-        # If Domain rejects the key or the ID is bad, catch it cleanly
-        if response.status_code == 401 or response.status_code == 403:
-             return {"success": False, "error": "Domain API Key rejected (Unauthorized). Check your Streamlit Secrets."}
-        elif response.status_code == 404:
-             return {"success": False, "error": "Property not found on Domain's API. It may be off-market."}
+        if response.status_code == 404:
+             return {"success": False, "error": "Property not found on Domain. It may be off-market or invalid."}
              
         response.raise_for_status() 
         data = response.json()
         
-        # 3. Extract the clean data
+        # 4. Extract the clean data
         media = data.get("media", [])
         image_urls = [m.get("url") for m in media if m.get("category") == "Image"][:5]
         
