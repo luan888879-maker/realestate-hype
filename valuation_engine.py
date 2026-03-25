@@ -1,79 +1,63 @@
-from __future__ import annotations
+def calculate_valuation(
+    asking_price: int, 
+    condition_score: int, 
+    land_value: int, 
+    bedrooms: int = 0, 
+    bathrooms: int = 0, 
+    carspaces: int = 0
+) -> dict:
+    """
+    Calculates the intrinsic value of a property and determines the Hype Premium.
+    Now includes dynamic hardware pricing based on Sydney construction baselines!
+    """
+    # Safety fallback if data is missing
+    if asking_price <= 0 or land_value <= 0:
+        return {
+            "intrinsic_value": 0,
+            "house_value": 0,
+            "land_to_asset_ratio": 0.0,
+            "hype_premium": 0,
+            "is_overpriced": False,
+            "error": "Invalid pricing data"
+        }
 
+    # Handle N/A or failed AI scores by assuming an average condition of 5
+    if not isinstance(condition_score, int):
+        try:
+            condition_score = int(condition_score)
+        except (ValueError, TypeError):
+            condition_score = 5
 
-def calculate_statutory_land_value(land_size_sqm: float, council_land_rate_per_sqm: float) -> float:
-    """Calculate statutory land value from land size and council land rate."""
-    return land_size_sqm * council_land_rate_per_sqm
+    # --- DYNAMIC HARDWARE VALUATION ---
+    # If the API found beds/baths, we calculate the exact replacement cost
+    if bedrooms > 0 or bathrooms > 0:
+        base_shell_cost = 200000
+        bed_cost = bedrooms * 75000
+        bath_cost = bathrooms * 40000
+        car_cost = carspaces * 25000
+        max_build_cost = base_shell_cost + bed_cost + bath_cost + car_cost
+    else:
+        # Fallback if the Domain API didn't have room data
+        max_build_cost = 600000 
 
+    # Apply the AI Depreciation (Condition Score / 10)
+    ai_adjusted_house_value = int((condition_score / 10.0) * max_build_cost)
 
-def calculate_true_market_land_value(statutory_land_value: float, local_market_multiplier: float) -> float:
-    """Calculate true market land value using a local market multiplier."""
-    return statutory_land_value * local_market_multiplier
+    # Calculate Total Intrinsic Value (Dirt + Hardware)
+    intrinsic_value = land_value + ai_adjusted_house_value
 
+    # Calculate Land-to-Asset Ratio
+    land_to_asset_ratio = round((land_value / asking_price) * 100, 1)
 
-def calculate_base_building_cost(building_size_sqm: float, construction_rate_per_sqm: float) -> float:
-    """Calculate base replacement cost of the building."""
-    return building_size_sqm * construction_rate_per_sqm
+    # Calculate Hype Premium
+    hype_premium = asking_price - intrinsic_value
+    is_overpriced = hype_premium > 0
 
-
-def calculate_depreciated_building_value(
-    base_building_cost: float, effective_age_years: float, lifespan_years: float
-) -> float:
-    """Calculate depreciated building value with linear depreciation and a 0 floor."""
-    depreciation_ratio: float = effective_age_years / lifespan_years
-    depreciation_ratio = max(0.0, min(1.0, depreciation_ratio))
-    return base_building_cost * (1.0 - depreciation_ratio)
-
-
-def calculate_intrinsic_value(true_market_land_value: float, depreciated_building_value: float) -> float:
-    """Calculate intrinsic value as land value plus depreciated building value."""
-    return true_market_land_value + depreciated_building_value
-
-
-def calculate_hype_premium(asking_price: float, intrinsic_value: float) -> float:
-    """Calculate hype premium: market asking price minus intrinsic value."""
-    return asking_price - intrinsic_value
-
-
-def calculate_lar(true_market_land_value: float, asking_price: float) -> float:
-    """Calculate Land-to-Asset Ratio (LAR) as a percentage."""
-    return (true_market_land_value / asking_price) * 100.0
-
-
-def main() -> None:
-    # Dummy example inputs
-    asking_price: float = 1_500_000.0
-    land_size_sqm: float = 600.0
-    building_size_sqm: float = 200.0
-    effective_age_years: float = 20.0
-    local_market_multiplier: float = 1.35
-
-    # Assumed rates for demonstration
-    council_land_rate_per_sqm: float = 1_000.0
-    construction_rate_per_sqm: float = 3_000.0
-    lifespan_years: float = 60.0
-
-    statutory_land_value: float = calculate_statutory_land_value(land_size_sqm, council_land_rate_per_sqm)
-    true_market_land_value: float = calculate_true_market_land_value(
-        statutory_land_value, local_market_multiplier
-    )
-    base_building_cost: float = calculate_base_building_cost(building_size_sqm, construction_rate_per_sqm)
-    depreciated_building_value: float = calculate_depreciated_building_value(
-        base_building_cost, effective_age_years, lifespan_years
-    )
-    intrinsic_value: float = calculate_intrinsic_value(true_market_land_value, depreciated_building_value)
-    hype_premium: float = calculate_hype_premium(asking_price, intrinsic_value)
-    lar_percentage: float = calculate_lar(true_market_land_value, asking_price)
-
-    print("=== Hype vs. Hardware Valuation ===")
-    print(f"Asking Price: ${asking_price:,.2f}")
-    print(f"Statutory Land Value: ${statutory_land_value:,.2f}")
-    print(f"True Market Land Value: ${true_market_land_value:,.2f}")
-    print(f"Depreciated Building Value: ${depreciated_building_value:,.2f}")
-    print(f"Intrinsic Value: ${intrinsic_value:,.2f}")
-    print(f"Hype Premium: ${hype_premium:,.2f}")
-    print(f"LAR: {lar_percentage:.2f}%")
-
-
-if __name__ == "__main__":
-    main()
+    return {
+        "intrinsic_value": intrinsic_value,
+        "house_value": ai_adjusted_house_value,
+        "land_to_asset_ratio": land_to_asset_ratio,
+        "hype_premium": hype_premium,
+        "is_overpriced": is_overpriced,
+        "error": None
+    }
