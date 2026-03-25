@@ -1,9 +1,13 @@
-from data_fetch import fetch_property_data
 import streamlit as st
-import time
-from vision_model import analyze_image_url
+from data_fetch import fetch_property_data
+from valuation_engine import calculate_valuation
+from vision_model import analyze_image_url # Assuming this is your Gemini vision import
 
-st.set_page_config(page_title="Hype vs Hardware", page_icon="🏢", layout="centered")
+# --- PAGE SETUP ---
+st.set_page_config(page_title="Hype vs Hardware", layout="wide")
+
+st.title("Hype vs. Hardware 🏠")
+st.write("AI-Powered Intrinsic Property Valuation")
 
 # --- SECURE SETTINGS & API VAULT ---
 try:
@@ -13,98 +17,53 @@ except (KeyError, FileNotFoundError):
     st.error("⚠️ API Keys missing from Streamlit Secrets. Please check your cloud settings.")
     st.stop()
 
-# --- MAIN DASHBOARD ---
-st.title("🏢 Hype vs. Hardware")
-st.subheader("The Institutional-Grade BS Detector for Property Investors")
-st.markdown("---")
-
-property_url = st.text_input("Paste a Domain.com.au Property URL:")
-
-# The Micro-Premium Toggles
-with st.expander("Optional: Add Micro-Premiums"):
-    north_facing = st.checkbox("North/North-East Facing Rear (+5% Land Value)")
-    flat_block = st.checkbox("Perfectly Flat Block (+0% to +5%)")
-    bad_position = st.checkbox("T-Intersection or Bad Street Position (-10%)")
-
-import streamlit as st
-from PIL import Image
-# ... your other imports ...
-
-# --- NEW HYBRID INPUT UI ---
+# --- INPUT UI ---
 st.write("### Target Property")
 property_url = st.text_input("Domain.com.au Listing URL:")
+estimated_land_val = st.number_input("Estimated Land Value ($)", min_value=100000, value=1100000, step=50000)
 
 st.markdown("---")
-with st.expander("🛠️ Manual Override (If Domain Firewall Blocks URL)"):
-    st.info("Use this if Domain.com.au blocks the cloud scraper.")
-    uploaded_photo = st.file_uploader("Upload Property Photo", type=["jpg", "jpeg", "png"])
-    manual_price = st.number_input("Asking Price ($)", min_value=0, value=1500000, step=50000)
-    manual_address = st.text_input("Property Address", value="Custom Upload")
 
-# The Action Button
+# --- THE ACTION BUTTON ---
 if st.button("Run Intrinsic Valuation"):
     
-    # 1. API Key Check
-    if 'api_key' not in locals() or 'domain_api_key' not in locals():
-        st.error("⚠️ API Keys missing. Please ensure GEMINI_API_KEY and DOMAIN_API_KEY are in your Streamlit Secrets.")
+    if not property_url:
+        st.error("Please enter a valid Domain URL first.")
         st.stop()
         
     with st.spinner("Pulling API data, analyzing hardware, and calculating valuation..."):
         
-        target_image = None
-        asking_price = 0
-        address = "Unknown Address"
-        asking_price_str = "Unknown"
-        bedrooms, bathrooms, carspaces = 0, 0, 0
+        # 1. API EXTRACTION
+        st.info("Connecting to official Domain API...")
+        scrape_result = fetch_property_data(property_url, domain_api_key)
         
-        # ROUTE A: Use Manual Upload if provided
-        if uploaded_photo is not None:
-            target_image = Image.open(uploaded_photo)
-            asking_price = manual_price
-            address = manual_address
-            asking_price_str = f"${asking_price:,.0f}"
-            st.success("Using Manual Override Data.")
-            
-        # ROUTE B: Try the Official Domain API
-        elif property_url:
-            st.info("Connecting to official Domain API...")
-            scrape_result = fetch_property_data(property_url, domain_api_key)
-            
-            if not scrape_result.get("success"):
-                st.error(f"⚠️ API Error: {scrape_result.get('error')}")
-                st.warning("Please check your Domain URL, or use the 'Manual Override' expander above.")
-                st.stop()
-            else:
-                target_image_url = scrape_result.get("image_urls", [])[0] if scrape_result.get("image_urls") else None
-                address = scrape_result.get("address", "Unknown Address")
-                asking_price = scrape_result.get("asking_price", 0)
-                asking_price_str = scrape_result.get("formatted_price", "Price not listed")
-                
-                # Grab the hardware stats!
-                bedrooms = scrape_result.get("bedrooms", 0)
-                bathrooms = scrape_result.get("bathrooms", 0)
-                carspaces = scrape_result.get("carspaces", 0)
-                
-                target_image = target_image_url 
-        else:
-            st.error("Please enter a URL or use the Manual Override.")
+        if not scrape_result.get("success"):
+            st.error(f"⚠️ API Error: {scrape_result.get('error')}")
             st.stop()
+            
+        # Extract the clean data
+        target_image_url = scrape_result.get("image_urls", [])[0] if scrape_result.get("image_urls") else None
+        address = scrape_result.get("address", "Unknown Address")
+        asking_price = scrape_result.get("asking_price", 0)
+        asking_price_str = scrape_result.get("formatted_price", "Price not listed")
+        
+        bedrooms = scrape_result.get("bedrooms", 0)
+        bathrooms = scrape_result.get("bathrooms", 0)
+        carspaces = scrape_result.get("carspaces", 0)
 
-        # --- UI UPDATE: Display Property Header & Hardware ---
+        # --- UI UPDATE: DISPLAY PROPERTY HEADER ---
         st.subheader(f"📍 {address}")
         if bedrooms or bathrooms or carspaces:
             st.caption(f"🛏️ {bedrooms} Bed | 🛁 {bathrooms} Bath | 🚗 {carspaces} Car")
         
-        if target_image:
-            st.image(target_image, caption=f"Primary Image - {address}", use_column_width=True)
+        if target_image_url:
+            st.image(target_image_url, caption=f"Primary Image - {address}", use_column_width=True)
         else:
             st.warning("No image found for this property.")
-        
+            st.stop() # The AI needs an image to do its job!
+
         # 2. RUN THE AI VISION ENGINE
-        if isinstance(target_image, str):
-            vision_result = analyze_image_url(target_image, api_key)
-        else:
-            vision_result = {"condition_score": 7, "needs_cosmetic_renovation": False, "reasoning": "Manual upload detected. High quality finish."}
+        vision_result = analyze_image_url(target_image_url, api_key)
             
         score = vision_result.get("condition_score", 5)
         needs_reno = vision_result.get("needs_cosmetic_renovation", True)
@@ -116,10 +75,12 @@ if st.button("Run Intrinsic Valuation"):
         except:
             safe_score = 5
 
+        # Note: We are currently passing the raw numbers, but the math engine 
+        # still needs to be upgraded to use beds and baths!
         valuation = calculate_valuation(
             asking_price=asking_price, 
             condition_score=safe_score, 
-            land_value=estimated_land_val # Make sure this variable exists above your button!
+            land_value=estimated_land_val
         )
         
         # 4. DISPLAY THE REPORT
