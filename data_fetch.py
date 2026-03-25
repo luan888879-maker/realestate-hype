@@ -1,99 +1,56 @@
-import cloudscraper
-from bs4 import BeautifulSoup
+import requests
 import re
 
-def fetch_property_data(url: str) -> dict:
-    """Scrapes Domain for up to 5 images, address, and asking price with robust error handling."""
+def fetch_property_data(url: str, domain_api_key: str) -> dict:
+    """Fetches structured property data using the official Domain API."""
     
-    scraper = cloudscraper.create_scraper(
-        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-    )
+    # 1. Extract the Listing ID from the end of the URL
+    try:
+        match = re.search(r'-([0-9]+)/?$', url.strip())
+        if not match:
+            return {"success": False, "error": "Could not extract Listing ID from the URL. Please ensure it is a valid Domain listing link."}
+        listing_id = match.group(1)
+    except Exception as e:
+        return {"success": False, "error": f"URL Parsing Error: {str(e)}"}
+
+    # 2. Call the Official Domain API
+    endpoint = f"https://api.domain.com.au/v1/listings/{listing_id}"
+    headers = {"X-Api-Key": domain_api_key}
     
     try:
-        # 1. Fetch the webpage
-        response = scraper.get(url, timeout=15.0)
-        response.raise_for_status() # This forces an error if we get a 403 Forbidden or 404 Not Found
+        response = requests.get(endpoint, headers=headers, timeout=10.0)
         
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # If Domain rejects the key or the ID is bad, catch it cleanly
+        if response.status_code == 401 or response.status_code == 403:
+             return {"success": False, "error": "Domain API Key rejected (Unauthorized). Check your Streamlit Secrets."}
+        elif response.status_code == 404:
+             return {"success": False, "error": "Property not found on Domain's API. It may be off-market."}
+             
+        response.raise_for_status() 
+        data = response.json()
         
-        # 2. Grab an Array of Images (The Gallery)
-        image_urls = []
-        og_image = soup.find('meta', property='og:image')
-        if og_image and og_image.get('content'):
-            image_urls.append(og_image.get('content'))
-            
-        for img in soup.find_all('img'):
-            src = img.get('src')
-            if src and 'http' in src and ('domain' in src or 'bucket' in src) and 'size=' not in src:
-                if src not in image_urls:
-                    image_urls.append(src)
-                    
-        target_images = image_urls[:5]
-
-        # 3. Grab the Address safely
-        address = "Address not found"
-        try:
-            og_title = soup.find('meta', property='og:title')
-            if og_title and og_title.get('content'):
-                address = og_title.get('content').split('-')[0].strip()
-        except Exception:
-            pass # Keep default "Address not found" if parsing fails
-
-        # 4. Hunt for the Price using Regex safely
-        asking_price = 0
-        price_text = "Price not listed"
-        try:
-            price_match = re.search(r'\$[0-9]{1,3}(?:,[0-9]{3})*', soup.text)
-            if price_match:
-                price_text = price_match.group()
-                clean_num = re.sub(r'[^\d]', '', price_text)
-                if clean_num:
-                    asking_price = int(clean_num)
-        except Exception:
-            pass # Keep default 0 and "Price not listed" if regex fails
-
-        # 5. Return structured data
-        if len(target_images) == 0:
-            return {
-                "success": False,
-                "error": "Page loaded successfully, but no property images could be found."
-            }
-
+        # 3. Extract the clean data
+        media = data.get("media", [])
+        image_urls = [m.get("url") for m in media if m.get("category") == "Image"][:5]
+        
+        address_obj = data.get("addressParts", {})
+        address = address_obj.get("displayAddress", "Address not found")
+        
+        price_details = data.get("priceDetails", {})
+        formatted_price = price_details.get("displayPrice", "Price not listed")
+        asking_price = price_details.get("price", 0) 
+        
         return {
             "success": True,
-            "image_urls": target_images,
+            "image_urls": image_urls,
             "address": address,
             "asking_price": asking_price,
-            "formatted_price": price_text,
+            "formatted_price": formatted_price,
+            "bedrooms": data.get("bedrooms", 0),
+            "bathrooms": data.get("bathrooms", 0),
+            "carspaces": data.get("carspaces", 0),
             "error": None
         }
         
     except Exception as e:
-        # This catches timeouts, local proxy blocks, and Domain WAF blocks
-        return {
-            "success": False,
-            "image_urls": [],
-            "address": "Unknown",
-            "asking_price": 0,
-            "formatted_price": "Unknown",
-            "error": f"Network or Scraper Error: {str(e)}"
-        }
-
-# --- Quick Local Workbench Test ---
-if __name__ == "__main__":
-    test_link = "https://www.domain.com.au/2-40-wentworth-street-glebe-nsw-2037-16942953"
-    print(f"Testing URL: {test_link}\n")
-    
-    result = fetch_property_data(test_link)
-    
-    # THE FIX: We explicitly check for success and print the actual error if it fails!
-    if result.get("success"):
-        print("✅ SCRAPE SUCCESSFUL\n")
-        print(f"Address: {result.get('address')}")
-        print(f"Price: {result.get('formatted_price')} (Integer value: {result.get('asking_price')})")
-        print(f"Images Found: {len(result.get('image_urls', []))}")
-        for idx, img in enumerate(result.get('image_urls', [])):
-            print(f"  Photo {idx + 1}: {img}")
-    else:
-        print("❌ SCRAPE FAILED\n")
-        print(f"Error Details: {result.get('error')}")
+        return {"success": False, "error": f"API Connection Error: {str(e)}"}
