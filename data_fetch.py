@@ -61,7 +61,7 @@ def fetch_property_data(property_url: str, scraper_api_key: str) -> dict:
         all_links = re.findall(r'(https?://[^"\'\\]+\.(?:jpg|jpeg|png|webp|avif))', raw_text, re.IGNORECASE)
         image_urls = []
         for link in all_links:
-            if link not in image_urls and 'domain' in link.lower() and 'profile' not in link.lower() and 'avatars' not in link.lower():
+            if link not in image_urls and 'profile' not in link.lower() and 'avatars' not in link.lower():
                 image_urls.append(link)
 
         print(f"✅ [2/3] HTML bypassed! Found {len(image_urls)} image links. Starting secure downloads...")
