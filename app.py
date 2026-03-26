@@ -72,6 +72,12 @@ if st.button("Run Intrinsic Valuation"):
         # Pass them to the upgraded Gemini Vision model
         vision_result = analyze_property_images(all_images, api_key)
             
+        # ---> ADD YOUR PRINT COMMANDS RIGHT HERE <---
+        print("=== AI PHOTO VERIFICATION ===")
+        print(f"Scraper sent: {len(all_images)} photos.")
+        print(f"AI claims it analyzed: {vision_result.get('photos_analyzed')} photos.")
+        print("=============================")
+        
         # THE FIX: Safely extract the data so the UI variables exist!
         score = vision_result.get("condition_score", 5)
         needs_reno = vision_result.get("needs_cosmetic_renovation", True)
