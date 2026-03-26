@@ -1,4 +1,5 @@
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import requests
 import json
 from PIL import Image
@@ -6,20 +7,17 @@ from io import BytesIO
 
 def analyze_property_images(image_urls, api_key: str) -> dict:
     """
-    Downloads up to 5 property photos, feeds them to Gemini as a single context window, 
-    and returns a structured JSON condition report.
+    Downloads up to 5 property photos, feeds them to Gemini 2.5 as a single context window, 
+    and returns a structured JSON condition report using the new google-genai SDK.
     """
     
-    # 1. Authenticate with Google
-    genai.configure(api_key=api_key)
-    
-    # Ensure we are working with a list, even if a single string gets passed by accident
+    # Ensure we are working with a list
     if isinstance(image_urls, str):
         image_urls = [image_urls]
         
     pil_images = []
     
-    # 2. Download the images into memory (Max 5 to keep it fast and cost-effective)
+    # 1. Download the images into memory
     for url in image_urls[:5]:
         try:
             response = requests.get(url, timeout=10.0)
@@ -30,7 +28,6 @@ def analyze_property_images(image_urls, api_key: str) -> dict:
             print(f"Failed to load an image for AI: {e}")
             continue
             
-    # Safety fallback if the scraper found URLs but the images are broken
     if not pil_images:
         return {
             "condition_score": 5, 
@@ -38,14 +35,10 @@ def analyze_property_images(image_urls, api_key: str) -> dict:
             "reasoning": "AI could not load the images. Defaulting to average condition."
         }
 
-    # 3. Initialize the Multimodal AI
-    # We use gemini-1.5-flash because it is blazingly fast and excellent at visual reasoning
-    model = genai.GenerativeModel(
-        'gemini-1.5-flash',
-        generation_config={"response_mime_type": "application/json"} # Forces a strict JSON output!
-    )
+    # 2. Initialize the New SDK Client
+    client = genai.Client(api_key=api_key)
 
-    # 4. The System Prompt
+    # 3. The System Prompt
     prompt = """
     You are an expert Australian real estate inspector and valuer. 
     Analyze this set of property photos (which may include exterior, kitchen, bathroom, and living areas).
@@ -60,9 +53,17 @@ def analyze_property_images(image_urls, api_key: str) -> dict:
     """
 
     try:
-        # We pass the text prompt AND the entire list of images in one massive payload
+        # We pass the text prompt AND the PIL images to the new client
         payload = [prompt] + pil_images
-        response = model.generate_content(payload)
+        
+        # 4. Generate Content with Gemini 2.5 Flash and strict JSON formatting
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=payload,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
+        )
         
         # 5. Parse the AI's JSON response
         result = json.loads(response.text)
