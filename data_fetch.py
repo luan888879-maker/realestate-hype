@@ -57,12 +57,28 @@ def fetch_property_data(property_url: str, scraper_api_key: str) -> dict:
         bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
         carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
 
-        # 3. Extract Image URLs (Upgraded with webp/avif support)
-        all_links = re.findall(r'(https?://[^"\'\\]+\.(?:jpg|jpeg|png|webp|avif))', raw_text, re.IGNORECASE)
-        image_urls = []
-        for link in all_links:
-            if link not in image_urls and 'profile' not in link.lower() and 'avatars' not in link.lower():
-                image_urls.append(link)
+       # 3. Extract Image URLs (The Deep-Dive Dictionary Method)
+        raw_urls = set() # Use a set to automatically prevent duplicates
+        
+        def hunt_for_urls(obj):
+            """Recursively hunts through every folder of the JSON for image links."""
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    hunt_for_urls(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    hunt_for_urls(item)
+            elif isinstance(obj, str):
+                lower_str = obj.lower()
+                # If it is a web link and an image...
+                if lower_str.startswith('http') and any(ext in lower_str for ext in ['.jpg', '.jpeg', '.png', '.webp', '.avif']):
+                    # And it isn't agent junk...
+                    if 'profile' not in lower_str and 'avatar' not in lower_str and 'logo' not in lower_str:
+                        raw_urls.add(obj)
+        
+        # Launch the hunter into the clean Python data
+        hunt_for_urls(data) 
+        image_urls = list(raw_urls)
 
         print(f"✅ [2/3] HTML bypassed! Found {len(image_urls)} image links. Starting secure downloads...")
 
