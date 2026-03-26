@@ -1,6 +1,5 @@
 streamlit
 requests
-google-genai
+google-generativeai
 Pillow
 beautifulsoup4
-cloudscraper
