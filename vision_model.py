@@ -48,6 +48,7 @@ def analyze_property_images(image_urls, api_key: str) -> dict:
     {
         "condition_score": <integer from 1 to 10, where 1 is an unlivable tear-down and 10 is a brand-new luxury build>,
         "needs_cosmetic_renovation": <boolean true or false>,
+        "photos_analyzed": <integer, tell me exactly how many photos were provided to you in this prompt>,
         "reasoning": "<A strict, punchy 2-sentence explanation of why you gave this score based on what you saw in the rooms>"
     }
     """
