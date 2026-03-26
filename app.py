@@ -63,15 +63,19 @@ if st.button("Run Intrinsic Valuation"):
             st.warning("No image found for this property.")
             st.stop() 
 
-      # 2. RUN THE AI VISION ENGINE
+     # 2. RUN THE AI VISION ENGINE
         st.info("AI Inspector scanning entire property condition...")
         
-        # WE NOW PASS THE FULL LIST OF SCRAPED IMAGES!
+        # Grab all the images the proxy found
         all_images = scrape_result.get("image_urls", [])
+        
+        # Pass them to the upgraded Gemini Vision model
         vision_result = analyze_property_images(all_images, api_key)
             
+        # THE FIX: Safely extract the data so the UI variables exist!
         score = vision_result.get("condition_score", 5)
-        # ... the rest remains the same ...
+        needs_reno = vision_result.get("needs_cosmetic_renovation", True)
+        reasoning = vision_result.get("reasoning", "No AI notes available.")
         
         # 3. RUN THE MATH ENGINE
         try:
