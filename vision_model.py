@@ -1,38 +1,76 @@
+import google.generativeai as genai
 import requests
-from google import genai
-from google.genai import types
-from PIL import Image
 import json
-import io
+from PIL import Image
+from io import BytesIO
 
-def analyze_image_url(image_url: str, api_key: str) -> dict:
+def analyze_property_images(image_urls, api_key: str) -> dict:
+    """
+    Downloads up to 5 property photos, feeds them to Gemini as a single context window, 
+    and returns a structured JSON condition report.
+    """
+    
+    # 1. Authenticate with Google
+    genai.configure(api_key=api_key)
+    
+    # Ensure we are working with a list, even if a single string gets passed by accident
+    if isinstance(image_urls, str):
+        image_urls = [image_urls]
+        
+    pil_images = []
+    
+    # 2. Download the images into memory (Max 5 to keep it fast and cost-effective)
+    for url in image_urls[:5]:
+        try:
+            response = requests.get(url, timeout=10.0)
+            if response.status_code == 200:
+                img = Image.open(BytesIO(response.content))
+                pil_images.append(img)
+        except Exception as e:
+            print(f"Failed to load an image for AI: {e}")
+            continue
+            
+    # Safety fallback if the scraper found URLs but the images are broken
+    if not pil_images:
+        return {
+            "condition_score": 5, 
+            "needs_cosmetic_renovation": True, 
+            "reasoning": "AI could not load the images. Defaulting to average condition."
+        }
+
+    # 3. Initialize the Multimodal AI
+    # We use gemini-1.5-flash because it is blazingly fast and excellent at visual reasoning
+    model = genai.GenerativeModel(
+        'gemini-1.5-flash',
+        generation_config={"response_mime_type": "application/json"} # Forces a strict JSON output!
+    )
+
+    # 4. The System Prompt
+    prompt = """
+    You are an expert Australian real estate inspector and valuer. 
+    Analyze this set of property photos (which may include exterior, kitchen, bathroom, and living areas).
+    Evaluate the physical hardware, age, wear-and-tear, and quality of finishes.
+    
+    Return ONLY a JSON object with this exact structure:
+    {
+        "condition_score": <integer from 1 to 10, where 1 is an unlivable tear-down and 10 is a brand-new luxury build>,
+        "needs_cosmetic_renovation": <boolean true or false>,
+        "reasoning": "<A strict, punchy 2-sentence explanation of why you gave this score based on what you saw in the rooms>"
+    }
+    """
+
     try:
-        # 1. Fetch image with a fake Browser Header to bypass bot-blockers
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        response = requests.get(image_url, headers=headers, timeout=10.0)
-        response.raise_for_status() # Forces an error if Unsplash/Domain blocks us
+        # We pass the text prompt AND the entire list of images in one massive payload
+        payload = [prompt] + pil_images
+        response = model.generate_content(payload)
         
-        # Load the image into memory
-        img = Image.open(io.BytesIO(response.content))
-        
-        # 2. Call Gemini API
-        client = genai.Client(api_key=api_key)
-        prompt = 'You are a strict real estate appraiser. Analyze this property photo. Return ONLY a JSON object with: "condition_score" (int 1-10), "needs_cosmetic_renovation" (boolean), and "reasoning" (1 short sentence).'
-        
-        result = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[img, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
-            )
-        )
-        
-        return json.loads(result.text)
+        # 5. Parse the AI's JSON response
+        result = json.loads(response.text)
+        return result
         
     except Exception as e:
-        # THE BLINDFOLD IS OFF: We inject the exact error into the dashboard!
         return {
-            'condition_score': 4,
-            'needs_cosmetic_renovation': True,
-            'reasoning': f'Mock data activated. ACTUAL ERROR: {str(e)}'
+            "condition_score": 5, 
+            "needs_cosmetic_renovation": True, 
+            "reasoning": f"AI Processing Error: {str(e)}"
         }
