@@ -12,7 +12,7 @@ st.write("AI-Powered Intrinsic Property Valuation")
 # --- SECURE SETTINGS & API VAULT ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
-    scraper_api_key = st.secrets["SCRAPER_API_KEY"] # NEW: Looking for the ScraperAPI key!
+    scraper_api_key = st.secrets["SCRAPER_API_KEY"]
 except (KeyError, FileNotFoundError):
     st.error("⚠️ API Keys missing from Streamlit Secrets. Please ensure GEMINI_API_KEY and SCRAPER_API_KEY are configured.")
     st.stop()
@@ -31,19 +31,17 @@ if st.button("Run Intrinsic Valuation"):
         st.error("Please enter a valid Domain URL first.")
         st.stop()
         
-    with st.spinner("Ghost proxy navigating Cloudflare, analyzing hardware, and calculating valuation..."):
+    with st.spinner("Ghost proxy navigating Cloudflare, extracting data, and downloading images..."):
         
-        # 1. API EXTRACTION (Using ScraperAPI)
-        st.info("Extracting hidden property data...")
-        # NEW: Handing over the proxy key instead of Domain credentials
+        # 1. API EXTRACTION & IMAGE DOWNLOAD
         scrape_result = fetch_property_data(property_url, scraper_api_key)
         
         if not scrape_result.get("success"):
             st.error(f"⚠️ Extraction Error: {scrape_result.get('error')}")
             st.stop()
             
-        # Extract the clean data
-        target_image_url = scrape_result.get("image_urls", [])[0] if scrape_result.get("image_urls") else None
+        # Extract the clean data and physical image files
+        downloaded_images = scrape_result.get("downloaded_images", [])
         address = scrape_result.get("address", "Unknown Address")
         asking_price = scrape_result.get("asking_price", 0)
         asking_price_str = scrape_result.get("formatted_price", "Price not listed")
@@ -57,29 +55,24 @@ if st.button("Run Intrinsic Valuation"):
         if bedrooms or bathrooms or carspaces:
             st.caption(f"🛏️ {bedrooms} Bed | 🛁 {bathrooms} Bath | 🚗 {carspaces} Car")
         
-        if target_image_url:
-            st.image(target_image_url, caption=f"Primary Image - {address}", use_column_width=True)
+        # Display the photos straight from memory
+        if downloaded_images:
+            st.image(downloaded_images[0], caption=f"Primary Image - {address}", use_column_width=True)
+            
+            if len(downloaded_images) > 1:
+                with st.expander(f"📸 View all {len(downloaded_images)} extracted photos"):
+                    cols = st.columns(len(downloaded_images))
+                    for idx, img in enumerate(downloaded_images):
+                        cols[idx].image(img, use_column_width=True)
         else:
-            st.warning("No image found for this property.")
+            st.warning("No images could be extracted for this property.")
             st.stop() 
 
-     # 2. RUN THE AI VISION ENGINE
-        st.info("AI Inspector scanning entire property condition...")
+    with st.spinner("AI Inspector scanning interior condition..."):
+        # 2. RUN THE AI VISION ENGINE
+        # We pass the physical files directly to the cleaned-up AI model
+        vision_result = analyze_property_images(downloaded_images, api_key)
         
-        # Grab all the images the proxy found
-        all_images = scrape_result.get("image_urls", [])
-        
-        # Pass them to the upgraded Gemini Vision model
-        vision_result = analyze_property_images(all_images, api_key)
-            
-       # ---> THE NEW UI PRINT COMMANDS <---
-        st.markdown("---")
-        st.write("### 🔍 AI Photo Verification")
-        st.info(f"**Scraper grabbed:** {len(all_images)} photos.")
-        st.success(f"**AI analyzed:** {vision_result.get('photos_analyzed')} photos.")
-        st.markdown("---")
-        
-        # THE FIX: Safely extract the data so the UI variables exist!
         score = vision_result.get("condition_score", 5)
         needs_reno = vision_result.get("needs_cosmetic_renovation", True)
         reasoning = vision_result.get("reasoning", "No AI notes available.")
@@ -121,9 +114,18 @@ if st.button("Run Intrinsic Valuation"):
                 else:
                     st.metric(label="Discount to Intrinsic", value=f"${abs(prem_val):,.0f}", delta="Underpriced!", delta_color="normal")
         
+        # --- THE AI DIAGNOSTICS & VERIFICATION ---
         st.markdown("---")
         st.write("### 🤖 AI Inspector Notes")
         st.info(reasoning)
         
         if needs_reno:
             st.warning("🛠️ Flagged for Cosmetic Arbitrage: Property requires renovation. Factor into holding costs.")
+            
+        st.markdown("---")
+        st.write("### 🔍 System Verification")
+        col_v1, col_v2 = st.columns(2)
+        with col_v1:
+            st.info(f"**Scraper Downloaded:** {len(downloaded_images)} photos.")
+        with col_v2:
+            st.success(f"**AI Analyzed:** {vision_result.get('photos_analyzed')} photos.")
