@@ -1,7 +1,7 @@
 import streamlit as st
 from data_fetch import fetch_property_data
 from valuation_engine import calculate_valuation
-from vision_model import analyze_property_images # Your Gemini Vision import
+from vision_model import analyze_property_images
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Hype vs Hardware", layout="wide")
