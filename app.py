@@ -1,7 +1,7 @@
 import streamlit as st
 from data_fetch import fetch_property_data
 from valuation_engine import calculate_valuation
-from vision_model import analyze_image_url # Your Gemini Vision import
+from vision_model import analyze_property_images # Your Gemini Vision import
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Hype vs Hardware", layout="wide")
@@ -63,13 +63,15 @@ if st.button("Run Intrinsic Valuation"):
             st.warning("No image found for this property.")
             st.stop() 
 
-        # 2. RUN THE AI VISION ENGINE
-        st.info("AI Inspector scanning property condition...")
-        vision_result = analyze_image_url(target_image_url, api_key)
+      # 2. RUN THE AI VISION ENGINE
+        st.info("AI Inspector scanning entire property condition...")
+        
+        # WE NOW PASS THE FULL LIST OF SCRAPED IMAGES!
+        all_images = scrape_result.get("image_urls", [])
+        vision_result = analyze_property_images(all_images, api_key)
             
         score = vision_result.get("condition_score", 5)
-        needs_reno = vision_result.get("needs_cosmetic_renovation", True)
-        reasoning = vision_result.get("reasoning", "No AI notes available.")
+        # ... the rest remains the same ...
         
         # 3. RUN THE MATH ENGINE
         try:
