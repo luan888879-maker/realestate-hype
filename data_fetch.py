@@ -6,6 +6,7 @@ from PIL import Image
 from io import BytesIO
 
 def extract_complex_data(obj, target_key):
+    """Recursively hunts for a key, but ONLY returns it if it is a Dictionary or List."""
     if isinstance(obj, dict):
         if target_key in obj and isinstance(obj[target_key], (dict, list)):
             return obj[target_key]
@@ -21,25 +22,29 @@ def extract_complex_data(obj, target_key):
     return None
 
 def fetch_property_data(property_url: str, scraper_api_key: str) -> dict:
-    """Bypasses Cloudflare, extracts data, AND downloads the images into memory."""
+    """Bypasses Cloudflare, extracts data, and securely downloads images into memory."""
     proxy_url = "https://api.scraperapi.com/"
     params = {"api_key": scraper_api_key, "url": property_url, "premium": "true", "country_code": "au"}
     
     try:
-        # 1. Get the Website Code
+        # 1. Fetch the main HTML
+        print("🚀 [1/3] Proxy initiated: Attempting to bypass Cloudflare for main HTML...")
         response = requests.get(proxy_url, params=params, timeout=45.0)
+        
         if response.status_code != 200:
             return {"success": False, "error": f"Proxy blocked. Status: {response.status_code}"}
             
         soup = BeautifulSoup(response.text, 'html.parser')
         next_data_script = soup.find('script', id='__NEXT_DATA__')
+        
         if not next_data_script:
             return {"success": False, "error": "Could not locate Domain's payload."}
             
         raw_text = next_data_script.string
         
-        # 2. Extract Data
+        # 2. Extract standard JSON data
         data = json.loads(raw_text)
+        
         address_parts = extract_complex_data(data, 'addressParts')
         address = address_parts.get('displayAddress', 'Unknown Address') if isinstance(address_parts, dict) else 'Unknown Address'
         
@@ -52,28 +57,36 @@ def fetch_property_data(property_url: str, scraper_api_key: str) -> dict:
         bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
         carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
 
-        # 3. Find Image URLs
-        all_links = re.findall(r'(https?://[^"\'\\]+\.(?:jpg|jpeg|png))', raw_text, re.IGNORECASE)
+        # 3. Extract Image URLs (Upgraded with webp/avif support)
+        all_links = re.findall(r'(https?://[^"\'\\]+\.(?:jpg|jpeg|png|webp|avif))', raw_text, re.IGNORECASE)
         image_urls = []
         for link in all_links:
             if link not in image_urls and 'domain' in link.lower() and 'profile' not in link.lower() and 'avatars' not in link.lower():
                 image_urls.append(link)
-                
-        # 4. DOWNLOAD THE IMAGES HERE (Your Idea)
+
+        print(f"✅ [2/3] HTML bypassed! Found {len(image_urls)} image links. Starting secure downloads...")
+
+        # 4. Securely download the images into memory
         pil_images = []
-        for url in image_urls[:5]:
+        for i, url in enumerate(image_urls[:5]):
+            print(f"   -> Downloading photo {i+1}...") # Heartbeat log
             img_params = {"api_key": scraper_api_key, "url": url, "country_code": "au"}
             try:
-                img_response = requests.get(proxy_url, params=img_params, timeout=20.0)
+                img_response = requests.get(proxy_url, params=img_params, timeout=30.0)
                 if img_response.status_code == 200:
                     img = Image.open(BytesIO(img_response.content))
                     pil_images.append(img)
+                else:
+                    print(f"   ❌ Proxy failed on photo {i+1} with status: {img_response.status_code}")
             except Exception as e:
+                print(f"   ❌ Connection error on photo {i+1}: {e}")
                 continue
+
+        print(f"🎉 [3/3] Successfully downloaded {len(pil_images)} photos into memory. Handing off to AI.")
 
         return {
             "success": True,
-            "downloaded_images": pil_images, # We now return the actual image files!
+            "downloaded_images": pil_images,
             "address": address,
             "asking_price": asking_price,
             "formatted_price": formatted_price,
