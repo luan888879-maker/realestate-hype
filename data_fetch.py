@@ -24,10 +24,9 @@ def extract_complex_data(obj, target_key):
 def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
     print(f"🚀 [1/3] Triggering Free Apify Puppeteer Browser (Cloudflare Bypass)...")
     
-    # 1. Initialize Apify
     client = ApifyClient(apify_api_key)
     
-    # 2. Run the Free Puppeteer Scraper with a custom Javascript injection
+    # 1. The Javascript Heist
     js_code = """
     async function pageFunction(context) { 
         const jsonStr = await context.page.evaluate(() => { 
@@ -53,7 +52,7 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
             
         data = items[0] 
         
-        # --- 2. EXTRACT CORE PROPERTY DATA ---
+        # 2. Extract Core Data
         address_parts = extract_complex_data(data, 'addressParts')
         address = address_parts.get('displayAddress', 'Unknown Address') if isinstance(address_parts, dict) else 'Unknown Address'
         
@@ -66,11 +65,10 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
         bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
         carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
 
-        # --- 3. THE SURGICAL GALLERY HUNTER ---
+        # 3. The Surgical Gallery Hunter (No Duplicates)
         image_urls = []
-        
-        # We find every 'media' folder in the JSON data
         media_folders = []
+        
         def find_media_folders(obj):
             if isinstance(obj, dict):
                 for k, v in obj.items():
@@ -84,29 +82,24 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
                     
         find_media_folders(data)
         
-        # Extract the high-res URL directly from the official gallery objects
         for folder in media_folders:
             for item in folder:
                 if isinstance(item, dict):
-                    # Domain strictly labels property photos as 'image'
                     item_type = item.get('type', '').lower()
                     if item_type in ['image', 'photograph', 'photo']:
                         url = item.get('url')
                         if url and url.startswith('http'):
-                            # Double-check we aren't grabbing floorplans
                             lower_url = url.lower()
                             if 'floorplan' not in lower_url and 'profile' not in lower_url:
-                                # Clean the URL and ensure no duplicates
-                                clean_url = url.split('?')[0]
+                                # Clean the URL to ensure absolute uniqueness
+                                clean_url = url.split('?')[0].split('-w')[0]
                                 if clean_url not in image_urls:
                                     image_urls.append(clean_url)
 
-        print(f"✅ [2/3] Data extracted! Found {len(image_urls)} true gallery photos, {bedrooms} beds, {bathrooms} baths.")
+        print(f"✅ [2/3] Data extracted! Found {len(image_urls)} unique gallery photos, {bedrooms} beds, {bathrooms} baths.")
         
-        # --- 4. DOWNLOAD IMAGES WITH VIP HEADERS ---
+        # 4. Download Top 5 Images with VIP Headers
         pil_images = []
-        
-        # Domain's CDN blocks raw Python scripts. We must pretend to be a Mac user clicking from Domain.com.au
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
             "Referer": "https://www.domain.com.au/",
