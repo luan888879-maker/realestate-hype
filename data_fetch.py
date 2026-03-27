@@ -54,43 +54,45 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
             
         data = items[0] 
         
-        # 3. YESTERDAY'S SURGICAL HUNTER (Adapted for the clean Apify pull)
-        address_parts = extract_complex_data(data, 'addressParts')
-        address = address_parts.get('displayAddress', 'Unknown Address') if isinstance(address_parts, dict) else 'Unknown Address'
+        # 3. THE "EXTENSIONLESS" IMAGE HUNTER
+        raw_urls = set()
         
-        price_details = extract_complex_data(data, 'priceDetails')
-        formatted_price = price_details.get('displayPrice', 'Price not listed') if isinstance(price_details, dict) else 'Price not listed'
-        asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
-        
-        features = extract_complex_data(data, 'features') or extract_complex_data(data, 'propertyFeatures')
-        bedrooms = features.get('beds', 0) if isinstance(features, dict) else 0
-        bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
-        carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
+        def deep_hunt_images(obj):
+            """Hunts every folder for URLs, even if they don't end in .jpg"""
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if k.lower() in ['url', 'imageurl', 'large', 'uri'] and isinstance(v, str):
+                        # If it is a web link and NOT an agent logo/avatar...
+                        if v.startswith('http') and 'profile' not in v.lower() and 'avatar' not in v.lower() and 'logo' not in v.lower():
+                            raw_urls.add(v)
+                    else:
+                        deep_hunt_images(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    deep_hunt_images(item)
 
-        # The Surgical Image Hunter (Ignoring Agent Profiles)
-        image_urls = []
-        media_list = extract_complex_data(data, 'media')
+        # Launch the hunter
+        deep_hunt_images(data)
         
-        if media_list and isinstance(media_list, list):
-            for item in media_list:
-                if item.get('type') == 'IMAGE':
-                    url = item.get('url')
-                    if url and url.startswith('http'):
-                        clean_url = url.replace('\\', '')
-                        if clean_url not in image_urls:
-                            image_urls.append(clean_url)
-
-        # Fallback regex just in case Domain changes the 'media' folder
+        # Filter the results: Domain keeps property photos in their "bucket-api"
+        image_urls = [u for u in raw_urls if 'bucket-api' in u.lower() or 'property' in u.lower()]
+        
+        # Fallback if the bucket-api wasn't found
         if not image_urls:
-            raw_text = json.dumps(data)
-            found = re.findall(r'(https?://[^"\'\\]+property[^"\'\\]+\.(?:jpg|jpeg|webp|avif))', raw_text, re.IGNORECASE)
-            image_urls = list(dict.fromkeys(found))
+            image_urls = list(raw_urls)
 
         print(f"✅ [2/3] HTML bypassed! Found {len(image_urls)} property photos, {bedrooms} beds, {bathrooms} baths.")
         
-        # 4. Download images into RAM
+        # 4. DOWNLOAD IMAGES WITH VIP HEADERS
         pil_images = []
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        
+        # Domain's CDN blocks raw Python scripts. We must pretend to be a Mac user clicking from Domain.com.au
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Referer": "https://www.domain.com.au/",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        }
+        
         for i, url in enumerate(image_urls[:5]):
             print(f"   -> Downloading high-res photo {i+1}...") 
             try:
@@ -98,8 +100,10 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
                 if img_response.status_code == 200:
                     img = Image.open(BytesIO(img_response.content))
                     pil_images.append(img)
+                else:
+                    print(f"   ❌ Blocked by CDN: Status {img_response.status_code}")
             except Exception as e:
-                print(f"   ❌ Failed to download photo {i+1}: {e}")
+                print(f"   ❌ Connection error on photo {i+1}: {e}")
                 continue
 
         print(f"🎉 [3/3] Successfully downloaded {len(pil_images)} photos into memory.")
@@ -118,3 +122,4 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
 
     except Exception as e:
         return {"success": False, "error": f"Apify Connection Error: {str(e)}"}
+        
