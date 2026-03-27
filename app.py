@@ -12,9 +12,9 @@ st.write("AI-Powered Intrinsic Property Valuation")
 # --- SECURE SETTINGS & API VAULT ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
-    scraper_api_key = st.secrets["SCRAPER_API_KEY"]
+    apify_api_key = st.secrets["APIFY_API_KEY"]
 except (KeyError, FileNotFoundError):
-    st.error("⚠️ API Keys missing from Streamlit Secrets. Please ensure GEMINI_API_KEY and SCRAPER_API_KEY are configured.")
+    st.error("⚠️ API Keys missing. Please ensure GEMINI_API_KEY and APIFY_API_KEY are configured in your Streamlit secrets.")
     st.stop()
 
 # --- INPUT UI ---
@@ -31,10 +31,10 @@ if st.button("Run Intrinsic Valuation"):
         st.error("Please enter a valid Domain URL first.")
         st.stop()
         
-    with st.spinner("Ghost proxy navigating Cloudflare, extracting data, and downloading images..."):
+    with st.spinner("Apify Cloud running headless browser extraction..."):
         
-        # 1. API EXTRACTION & IMAGE DOWNLOAD
-        scrape_result = fetch_property_data(property_url, scraper_api_key)
+        # 1. API EXTRACTION & IMAGE DOWNLOAD (Using Apify)
+        scrape_result = fetch_property_data(property_url, apify_api_key)
         
         if not scrape_result.get("success"):
             st.error(f"⚠️ Extraction Error: {scrape_result.get('error')}")
@@ -70,7 +70,6 @@ if st.button("Run Intrinsic Valuation"):
 
     with st.spinner("AI Inspector scanning interior condition..."):
         # 2. RUN THE AI VISION ENGINE
-        # We pass the physical files directly to the cleaned-up AI model
         vision_result = analyze_property_images(downloaded_images, api_key)
         
         score = vision_result.get("condition_score", 5)
@@ -124,8 +123,4 @@ if st.button("Run Intrinsic Valuation"):
             
         st.markdown("---")
         st.write("### 🔍 System Verification")
-        col_v1, col_v2 = st.columns(2)
-        with col_v1:
-            st.info(f"**Scraper Downloaded:** {len(downloaded_images)} photos.")
-        with col_v2:
-            st.success(f"**AI Analyzed:** {vision_result.get('photos_analyzed')} photos.")
+        st.success(f"**Pipeline Active:** Apify securely extracted and AI analyzed {len(downloaded_images)} photos.")
