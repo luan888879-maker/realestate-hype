@@ -28,7 +28,6 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
     client = ApifyClient(apify_api_key)
     
     # 2. Run the Free Puppeteer Scraper with a custom Javascript injection
-    # This specifically targets the exact house URL and steals the hidden JSON data
     js_code = """
     async function pageFunction(context) { 
         const jsonStr = await context.page.evaluate(() => { 
@@ -54,7 +53,20 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
             
         data = items[0] 
         
-        # 3. THE "EXTENSIONLESS" IMAGE HUNTER
+        # --- 2. EXTRACT CORE PROPERTY DATA ---
+        address_parts = extract_complex_data(data, 'addressParts')
+        address = address_parts.get('displayAddress', 'Unknown Address') if isinstance(address_parts, dict) else 'Unknown Address'
+        
+        price_details = extract_complex_data(data, 'priceDetails')
+        formatted_price = price_details.get('displayPrice', 'Price not listed') if isinstance(price_details, dict) else 'Price not listed'
+        asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
+        
+        features = extract_complex_data(data, 'features') or extract_complex_data(data, 'propertyFeatures')
+        bedrooms = features.get('beds', 0) if isinstance(features, dict) else 0
+        bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
+        carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
+
+        # --- 3. THE "EXTENSIONLESS" IMAGE HUNTER ---
         raw_urls = set()
         
         def deep_hunt_images(obj):
@@ -83,7 +95,7 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
 
         print(f"✅ [2/3] HTML bypassed! Found {len(image_urls)} property photos, {bedrooms} beds, {bathrooms} baths.")
         
-        # 4. DOWNLOAD IMAGES WITH VIP HEADERS
+        # --- 4. DOWNLOAD IMAGES WITH VIP HEADERS ---
         pil_images = []
         
         # Domain's CDN blocks raw Python scripts. We must pretend to be a Mac user clicking from Domain.com.au
@@ -122,4 +134,3 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
 
     except Exception as e:
         return {"success": False, "error": f"Apify Connection Error: {str(e)}"}
-        
