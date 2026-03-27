@@ -66,34 +66,42 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
         bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
         carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
 
-        # --- 3. THE "EXTENSIONLESS" IMAGE HUNTER ---
-        raw_urls = set()
+        # --- 3. THE SURGICAL GALLERY HUNTER ---
+        image_urls = []
         
-        def deep_hunt_images(obj):
-            """Hunts every folder for URLs, even if they don't end in .jpg"""
+        # We find every 'media' folder in the JSON data
+        media_folders = []
+        def find_media_folders(obj):
             if isinstance(obj, dict):
                 for k, v in obj.items():
-                    if k.lower() in ['url', 'imageurl', 'large', 'uri'] and isinstance(v, str):
-                        # If it is a web link and NOT an agent logo/avatar...
-                        if v.startswith('http') and 'profile' not in v.lower() and 'avatar' not in v.lower() and 'logo' not in v.lower():
-                            raw_urls.add(v)
+                    if k.lower() == 'media' and isinstance(v, list):
+                        media_folders.append(v)
                     else:
-                        deep_hunt_images(v)
+                        find_media_folders(v)
             elif isinstance(obj, list):
                 for item in obj:
-                    deep_hunt_images(item)
-
-        # Launch the hunter
-        deep_hunt_images(data)
+                    find_media_folders(item)
+                    
+        find_media_folders(data)
         
-        # Filter the results: Domain keeps property photos in their "bucket-api"
-        image_urls = [u for u in raw_urls if 'bucket-api' in u.lower() or 'property' in u.lower()]
-        
-        # Fallback if the bucket-api wasn't found
-        if not image_urls:
-            image_urls = list(raw_urls)
+        # Extract the high-res URL directly from the official gallery objects
+        for folder in media_folders:
+            for item in folder:
+                if isinstance(item, dict):
+                    # Domain strictly labels property photos as 'image'
+                    item_type = item.get('type', '').lower()
+                    if item_type in ['image', 'photograph', 'photo']:
+                        url = item.get('url')
+                        if url and url.startswith('http'):
+                            # Double-check we aren't grabbing floorplans
+                            lower_url = url.lower()
+                            if 'floorplan' not in lower_url and 'profile' not in lower_url:
+                                # Clean the URL and ensure no duplicates
+                                clean_url = url.split('?')[0]
+                                if clean_url not in image_urls:
+                                    image_urls.append(clean_url)
 
-        print(f"✅ [2/3] HTML bypassed! Found {len(image_urls)} property photos, {bedrooms} beds, {bathrooms} baths.")
+        print(f"✅ [2/3] Data extracted! Found {len(image_urls)} true gallery photos, {bedrooms} beds, {bathrooms} baths.")
         
         # --- 4. DOWNLOAD IMAGES WITH VIP HEADERS ---
         pil_images = []
