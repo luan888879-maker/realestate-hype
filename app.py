@@ -12,9 +12,9 @@ st.write("AI-Powered Intrinsic Property Valuation")
 # --- SECURE SETTINGS & API VAULT ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
-    apify_api_key = st.secrets["APIFY_API_KEY"]
+    scraper_api_key = st.secrets["SCRAPER_API_KEY"] # <-- Change this back
 except (KeyError, FileNotFoundError):
-    st.error("⚠️ API Keys missing. Please ensure GEMINI_API_KEY and APIFY_API_KEY are configured in your Streamlit secrets.")
+    st.error("⚠️ API Keys missing.")
     st.stop()
 
 # --- INPUT UI ---
@@ -33,8 +33,8 @@ if st.button("Run Intrinsic Valuation"):
         
     with st.spinner("Apify Cloud running headless browser extraction..."):
         
-        # 1. API EXTRACTION & IMAGE DOWNLOAD (Using Apify)
-        scrape_result = fetch_property_data(property_url, apify_api_key)
+        # 1. API EXTRACTION & IMAGE DOWNLOAD
+        scrape_result = fetch_property_data(property_url, scraper_api_key)
         
         if not scrape_result.get("success"):
             st.error(f"⚠️ Extraction Error: {scrape_result.get('error')}")
