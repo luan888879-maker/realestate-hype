@@ -12,9 +12,9 @@ st.write("AI-Powered Intrinsic Property Valuation")
 # --- SECURE SETTINGS & API VAULT ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
-    scraper_api_key = st.secrets["SCRAPER_API_KEY"] # <-- Change this back
+    apify_api_key = st.secrets["APIFY_API_KEY"]
 except (KeyError, FileNotFoundError):
-    st.error("⚠️ API Keys missing.")
+    st.error("⚠️ API Keys missing. Please ensure GEMINI_API_KEY and APIFY_API_KEY are configured in your Streamlit secrets.")
     st.stop()
 
 # --- INPUT UI ---
@@ -31,10 +31,10 @@ if st.button("Run Intrinsic Valuation"):
         st.error("Please enter a valid Domain URL first.")
         st.stop()
         
-    with st.spinner("Apify Cloud running headless browser extraction..."):
+    with st.spinner("Apify Cloud running premium extraction..."):
         
-        # 1. API EXTRACTION & IMAGE DOWNLOAD
-        scrape_result = fetch_property_data(property_url, scraper_api_key)
+        # 1. API EXTRACTION & IMAGE DOWNLOAD (Using Premium Apify Actor)
+        scrape_result = fetch_property_data(property_url, apify_api_key)
         
         if not scrape_result.get("success"):
             st.error(f"⚠️ Extraction Error: {scrape_result.get('error')}")
@@ -54,6 +54,10 @@ if st.button("Run Intrinsic Valuation"):
         st.subheader(f"📍 {address}")
         if bedrooms or bathrooms or carspaces:
             st.caption(f"🛏️ {bedrooms} Bed | 🛁 {bathrooms} Bath | 🚗 {carspaces} Car")
+            
+        # Handle the "Contact Agent" / "Auction" zero-price edge case safely
+        if asking_price == 0:
+            st.warning(f"⚠️ Listed as '{asking_price_str}'. Intrinsic Value will calculate, but Hype Premium cannot be determined.")
         
         # Display the photos straight from memory
         if downloaded_images:
@@ -65,7 +69,7 @@ if st.button("Run Intrinsic Valuation"):
                     for idx, img in enumerate(downloaded_images):
                         cols[idx].image(img, use_column_width=True)
         else:
-            st.warning("No images could be extracted for this property.")
+            st.warning("No high-res gallery images could be extracted for this property. The AI needs photos to run the valuation.")
             st.stop() 
 
     with st.spinner("AI Inspector scanning interior condition..."):
@@ -106,12 +110,14 @@ if st.button("Run Intrinsic Valuation"):
             
             if valuation.get("error"):
                 st.metric(label="Hype Premium", value="Data Error")
-            else:
+            elif asking_price > 0:
                 prem_val = valuation.get("hype_premium", 0)
                 if prem_val > 0:
                     st.metric(label="Hype Premium", value=f"${prem_val:,.0f}", delta="-Overpriced", delta_color="inverse")
                 else:
                     st.metric(label="Discount to Intrinsic", value=f"${abs(prem_val):,.0f}", delta="Underpriced!", delta_color="normal")
+            else:
+                 st.metric(label="Hype Premium", value="N/A (Auction)")
         
         # --- THE AI DIAGNOSTICS & VERIFICATION ---
         st.markdown("---")
@@ -123,4 +129,4 @@ if st.button("Run Intrinsic Valuation"):
             
         st.markdown("---")
         st.write("### 🔍 System Verification")
-        st.success(f"**Pipeline Active:** Apify securely extracted and AI analyzed {len(downloaded_images)} photos.")
+        st.success(f"**Pipeline Active:** API securely extracted and AI analyzed {len(downloaded_images)} photos.")
