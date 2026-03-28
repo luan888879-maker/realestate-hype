@@ -3,3 +3,4 @@ requests
 google-genai
 Pillow
 apify-client
+beautifulsoup4
