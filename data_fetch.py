@@ -54,57 +54,46 @@ def fetch_property_data(property_url: str, scraper_api_key: str) -> dict:
         bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
         carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
         
-        # 3. The Surgical Gallery Hunter (No agent headshots, no duplicates)
+        # 3. THE BRUTE-FORCE IMAGE HUNTER
+        # We convert the entire JSON into a massive string and hunt for Domain's specific Image CDNs
+        raw_string = json.dumps(data)
+        
+        # Domain strictly uses rimh2 or bucket-api to host property photos. We grab them all.
+        raw_urls = re.findall(r'(https?://(?:rimh2\.domain\.com\.au|bucket-api\.domain\.com\.au)[^\s"\'\\]+)', raw_string)
+        
         image_urls = []
-        media_folders = []
-        
-        def find_media_folders(obj):
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    if k.lower() == 'media' and isinstance(v, list):
-                        media_folders.append(v)
-                    else:
-                        find_media_folders(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    find_media_folders(item)
-                    
-        find_media_folders(data)
-        
-        for folder in media_folders:
-            for item in folder:
-                if isinstance(item, dict):
-                    item_type = item.get('type', '').lower()
-                    if item_type in ['image', 'photograph', 'photo']:
-                        url = item.get('url')
-                        if url and url.startswith('http'):
-                            lower_url = url.lower()
-                            if 'floorplan' not in lower_url and 'profile' not in lower_url:
-                                clean_url = url.split('?')[0].split('-w')[0]
-                                if clean_url not in image_urls:
-                                    image_urls.append(clean_url)
+        for url in raw_urls:
+            # Clean up the JSON escaping and remove size limits to get the raw high-res photo
+            clean_url = url.replace('\\u002F', '/').replace('\\', '').split('?')[0].split('-w')[0]
+            
+            # Filter out agent logos
+            if 'profile' not in clean_url.lower() and 'avatar' not in clean_url.lower():
+                if clean_url not in image_urls:
+                    image_urls.append(clean_url)
 
-        print(f"✅ [2/3] Data extracted! Found {len(image_urls)} unique photos, {bedrooms} beds, {bathrooms} baths.")
+        print(f"✅ [2/3] Data extracted! Found {len(image_urls)} unique Domain CDN photos.")
         
-        # 4. Download images using Native VIP Headers
+        # 4. THE NUCLEAR DOWNLOADER (Proxying the Images)
         pil_images = []
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Referer": "https://www.domain.com.au/",
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-        }
         
+        # We don't download from our server. We force ScraperAPI to fetch the images too!
         for i, url in enumerate(image_urls[:5]):
-            print(f"   -> Downloading high-res photo {i+1}...") 
+            print(f"   -> Proxying high-res photo {i+1}...") 
             try:
-                img_response = requests.get(url, headers=headers, timeout=15.0)
+                img_params = {"api_key": scraper_api_key, "url": url, "country_code": "au"}
+                # Notice we send it through proxy_url, NOT the raw url
+                img_response = requests.get(proxy_url, params=img_params, timeout=25.0)
+                
                 if img_response.status_code == 200:
                     img = Image.open(BytesIO(img_response.content))
                     pil_images.append(img)
-            except Exception:
+                else:
+                    print(f"   ❌ Proxy failed on photo {i+1} (Status {img_response.status_code})")
+            except Exception as e:
+                print(f"   ❌ Connection error on photo {i+1}: {e}")
                 continue
 
-        print(f"🎉 [3/3] Successfully downloaded {len(pil_images)} photos.")
+        print(f"🎉 [3/3] Successfully proxied {len(pil_images)} photos into memory.")
 
         return {
             "success": True,
