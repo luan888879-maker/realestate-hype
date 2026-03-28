@@ -1,106 +1,79 @@
 import requests
 from PIL import Image
 from io import BytesIO
-from bs4 import BeautifulSoup
+from apify_client import ApifyClient
 import re
-import json
 
-def extract_complex_data(obj, target_key):
-    """Recursively hunts for a key, but ONLY returns it if it is a Dictionary or List."""
-    if isinstance(obj, dict):
-        if target_key in obj and isinstance(obj[target_key], (dict, list)):
-            return obj[target_key]
-        for k, v in obj.items():
-            result = extract_complex_data(v, target_key)
-            if result is not None:
-                return result
-    elif isinstance(obj, list):
-        for item in obj:
-            result = extract_complex_data(item, target_key)
-            if result is not None:
-                return result
-    return None
-
-def fetch_property_data(property_url: str, scraper_api_key: str) -> dict:
-    print(f"🚀 [1/3] Triggering ScraperAPI (Cloudflare Bypass)...")
+def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
+    print(f"🚀 [1/3] Triggering Dedicated Property API (easyapi/domain-com-au-property-scraper)...")
     
-    proxy_url = "http://api.scraperapi.com"
-    params = {"api_key": scraper_api_key, "url": property_url, "country_code": "au"}
+    client = ApifyClient(apify_api_key)
+    
+    # We strictly limit it to 1 item so it doesn't wander off and scrape neighbors
+    run_input = {
+        "searchUrls": [property_url],
+        "maxItems": 1
+    }
     
     try:
-        # 1. Grab raw HTML via ScraperAPI
-        response = requests.get(proxy_url, params=params, timeout=45.0)
+        run = client.actor("easyapi/domain-com-au-property-scraper").call(run_input=run_input)
+        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
         
-        soup = BeautifulSoup(response.text, 'html.parser')
-        next_data_script = soup.find('script', id='__NEXT_DATA__')
-        
-        if not next_data_script:
-            return {"success": False, "error": "Domain blocked the proxy. Run it again."}
+        if not items:
+            return {"success": False, "error": "API returned blank. Domain might have removed the listing."}
             
-        data = json.loads(next_data_script.string)
+        data = items[0]
         
-        # 2. Extract Core Data using the Deep Hunter
-        address_parts = extract_complex_data(data, 'addressParts')
-        address = address_parts.get('displayAddress', 'Unknown Address') if isinstance(address_parts, dict) else 'Unknown Address'
+        # --- Extract Exact Data ---
+        address = data.get('address', 'Unknown Address')
         
-        price_details = extract_complex_data(data, 'priceDetails')
-        formatted_price = price_details.get('displayPrice', 'Contact Agent') if isinstance(price_details, dict) else 'Contact Agent'
+        # Handle "Contact Agent" cleanly
+        price_raw = str(data.get('price', '0'))
+        asking_price = int(re.sub(r'[^\d]', '', price_raw)) if re.sub(r'[^\d]', '', price_raw) else 0
         
-        # Safe extraction of price (Defaults to 0 if it says 'Auction' or 'Contact Agent')
-        asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
+        bedrooms = int(data.get('beds', 0))
+        bathrooms = int(data.get('baths', 0))
+        carspaces = int(data.get('parking', 0))
         
-        features = extract_complex_data(data, 'features') or extract_complex_data(data, 'propertyFeatures')
-        bedrooms = features.get('beds', 0) if isinstance(features, dict) else 0
-        bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
-        carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
+        # Grab the exact high-res image array provided by the API
+        image_urls = data.get('images', [])
         
-        # 3. THE BRUTE-FORCE IMAGE HUNTER
-        # We convert the entire JSON into a massive string and hunt for Domain's specific Image CDNs
-        raw_string = json.dumps(data)
-        
-        # Domain strictly uses rimh2 or bucket-api to host property photos. We grab them all.
-        raw_urls = re.findall(r'(https?://(?:rimh2\.domain\.com\.au|bucket-api\.domain\.com\.au)[^\s"\'\\]+)', raw_string)
-        
-        image_urls = []
-        for url in raw_urls:
-            # Clean up the JSON escaping and remove size limits to get the raw high-res photo
-            clean_url = url.replace('\\u002F', '/').replace('\\', '').split('?')[0].split('-w')[0]
+        # Fallback if 'images' is empty but 'media' exists
+        if not image_urls and 'media' in data:
+            image_urls = [m.get('url') for m in data['media'] if m.get('type') == 'image']
             
-            # Filter out agent logos
-            if 'profile' not in clean_url.lower() and 'avatar' not in clean_url.lower():
-                if clean_url not in image_urls:
-                    image_urls.append(clean_url)
-
-        print(f"✅ [2/3] Data extracted! Found {len(image_urls)} unique Domain CDN photos.")
+        print(f"✅ [2/3] Data extracted! Found {len(image_urls)} photos, {bedrooms} beds, {bathrooms} baths.")
         
-        # 4. THE NUCLEAR DOWNLOADER (Proxying the Images)
+        # --- Download Images ---
         pil_images = []
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.domain.com.au/"
+        }
         
-        # We don't download from our server. We force ScraperAPI to fetch the images too!
         for i, url in enumerate(image_urls[:5]):
-            print(f"   -> Proxying high-res photo {i+1}...") 
+            print(f"   -> Downloading high-res photo {i+1}...") 
             try:
-                img_params = {"api_key": scraper_api_key, "url": url, "country_code": "au"}
-                # Notice we send it through proxy_url, NOT the raw url
-                img_response = requests.get(proxy_url, params=img_params, timeout=25.0)
-                
+                img_response = requests.get(url, headers=headers, timeout=15.0)
                 if img_response.status_code == 200:
                     img = Image.open(BytesIO(img_response.content))
                     pil_images.append(img)
                 else:
-                    print(f"   ❌ Proxy failed on photo {i+1} (Status {img_response.status_code})")
+                    print(f"   ❌ Blocked by CDN: Status {img_response.status_code}")
             except Exception as e:
                 print(f"   ❌ Connection error on photo {i+1}: {e}")
-                continue
 
-        print(f"🎉 [3/3] Successfully proxied {len(pil_images)} photos into memory.")
+        if not pil_images:
+             return {"success": False, "error": "Found image URLs, but Domain's CDN blocked the download."}
+
+        print(f"🎉 [3/3] Successfully downloaded {len(pil_images)} photos.")
 
         return {
             "success": True,
             "downloaded_images": pil_images,
             "address": address,
             "asking_price": asking_price,
-            "formatted_price": formatted_price,
+            "formatted_price": price_raw,
             "bedrooms": bedrooms,
             "bathrooms": bathrooms,
             "carspaces": carspaces,
@@ -108,4 +81,4 @@ def fetch_property_data(property_url: str, scraper_api_key: str) -> dict:
         }
 
     except Exception as e:
-        return {"success": False, "error": f"ScraperAPI Connection Error: {str(e)}"}
+        return {"success": False, "error": f"API Connection Error: {str(e)}"}
