@@ -26,7 +26,7 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
     # Run the specific PowerAI Domain Actor
     run_input = {
         "searchUrls": [property_url],
-        "maxItems": 1
+        "maxItems": 100
     }
     
     try:
