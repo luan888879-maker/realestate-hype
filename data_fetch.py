@@ -1,97 +1,108 @@
 import requests
 from PIL import Image
 from io import BytesIO
-from apify_client import ApifyClient
+from bs4 import BeautifulSoup
 import re
+import json
 
-def extract_value(data_dict, possible_keys, default=None):
-    """Hunts the Apify dictionary for variations of a key."""
-    if not isinstance(data_dict, dict):
-        return default
-        
-    for key, value in data_dict.items():
-        if key.lower() in [k.lower() for k in possible_keys] and value is not None:
-            return value
-        if isinstance(value, dict):
-            result = extract_value(value, possible_keys, default)
-            if result != default:
+def extract_complex_data(obj, target_key):
+    """Recursively hunts for a key, but ONLY returns it if it is a Dictionary or List."""
+    if isinstance(obj, dict):
+        if target_key in obj and isinstance(obj[target_key], (dict, list)):
+            return obj[target_key]
+        for k, v in obj.items():
+            result = extract_complex_data(v, target_key)
+            if result is not None:
                 return result
-    return default
+    elif isinstance(obj, list):
+        for item in obj:
+            result = extract_complex_data(item, target_key)
+            if result is not None:
+                return result
+    return None
 
-def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
-    print(f"🚀 [1/3] Triggering PowerAI Domain Scraper (Pay-Per-Result)...")
+def fetch_property_data(property_url: str, scraper_api_key: str) -> dict:
+    print(f"🚀 [1/3] Triggering ScraperAPI (Cloudflare Bypass)...")
     
-    client = ApifyClient(apify_api_key)
-    
-    # Run the specific PowerAI Domain Actor
-    run_input = {
-        "searchUrls": [property_url],
-        "maxItems": 100
-    }
+    proxy_url = "http://api.scraperapi.com"
+    params = {"api_key": scraper_api_key, "url": property_url, "country_code": "au"}
     
     try:
-        # Changed to your new chosen Actor
-        run = client.actor("powerai/domain-com-au-property-scraper-ppr").call(run_input=run_input)
-        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+        # 1. Grab raw HTML via ScraperAPI
+        response = requests.get(proxy_url, params=params, timeout=45.0)
         
-        if not items:
-            return {"success": False, "error": "Apify ran successfully, but returned no data. Check the URL."}
+        soup = BeautifulSoup(response.text, 'html.parser')
+        next_data_script = soup.find('script', id='__NEXT_DATA__')
+        
+        if not next_data_script:
+            return {"success": False, "error": "Domain blocked the proxy. Run it again."}
             
-        data = items[0]
+        data = json.loads(next_data_script.string)
         
-        # --- 1. CORE PROPERTY DATA ---
-        address = str(extract_value(data, ['address', 'displayaddress', 'streetaddress'], "Unknown Address"))
+        # 2. Extract Core Data using the Deep Hunter
+        address_parts = extract_complex_data(data, 'addressParts')
+        address = address_parts.get('displayAddress', 'Unknown Address') if isinstance(address_parts, dict) else 'Unknown Address'
         
-        price_str = str(extract_value(data, ['price', 'displayprice'], "0"))
-        asking_price = int(re.sub(r'[^\d]', '', price_str)) if re.sub(r'[^\d]', '', price_str) else 0
+        price_details = extract_complex_data(data, 'priceDetails')
+        formatted_price = price_details.get('displayPrice', 'Contact Agent') if isinstance(price_details, dict) else 'Contact Agent'
         
-        sold_price_str = str(extract_value(data, ['soldprice', 'solddetails'], "0"))
-        sold_price = int(re.sub(r'[^\d]', '', sold_price_str)) if re.sub(r'[^\d]', '', sold_price_str) else 0
+        # Safe extraction of price (Defaults to 0 if it says 'Auction' or 'Contact Agent')
+        asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
         
-        bedrooms = int(extract_value(data, ['beds', 'bedrooms', 'bedroom'], 0))
-        bathrooms = int(extract_value(data, ['baths', 'bathrooms', 'bathroom'], 0))
-        carspaces = int(extract_value(data, ['cars', 'carspaces', 'parking'], 0))
+        features = extract_complex_data(data, 'features') or extract_complex_data(data, 'propertyFeatures')
+        bedrooms = features.get('beds', 0) if isinstance(features, dict) else 0
+        bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
+        carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
         
-        # --- 2. ADVANCED BUILDING & LAND METRICS ---
-        land_m2 = extract_value(data, ['landarea', 'landsize', 'areasize'], 0)
-        building_m2 = extract_value(data, ['buildingarea', 'floorsize', 'buildingsize'], 0)
+        # 3. The Surgical Gallery Hunter (No agent headshots, no duplicates)
+        image_urls = []
+        media_folders = []
         
-        # Domain stores extra amenities in a list/array
-        features_list = extract_value(data, ['features', 'propertyfeatures', 'tags'], [])
-        if not isinstance(features_list, list):
-            features_list = []
-            
-        # Convert list to lowercase string for easy keyword hunting
-        features_text = str(features_list).lower()
+        def find_media_folders(obj):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if k.lower() == 'media' and isinstance(v, list):
+                        media_folders.append(v)
+                    else:
+                        find_media_folders(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    find_media_folders(item)
+                    
+        find_media_folders(data)
         
-        has_pool = 'pool' in features_text
-        is_vacant_land = 'vacant' in features_text or 'land' in address.lower()
-        
-        # --- 3. IMAGE EXTRACTION ---
-        image_urls = extract_value(data, ['images', 'photos', 'media', 'imageurls'], [])
-        clean_urls = []
-        if isinstance(image_urls, list):
-            for img in image_urls:
-                if isinstance(img, str) and img.startswith('http'):
-                    clean_urls.append(img)
-                elif isinstance(img, dict) and 'url' in img and img['url'].startswith('http'):
-                    clean_urls.append(img['url'])
+        for folder in media_folders:
+            for item in folder:
+                if isinstance(item, dict):
+                    item_type = item.get('type', '').lower()
+                    if item_type in ['image', 'photograph', 'photo']:
+                        url = item.get('url')
+                        if url and url.startswith('http'):
+                            lower_url = url.lower()
+                            if 'floorplan' not in lower_url and 'profile' not in lower_url:
+                                clean_url = url.split('?')[0].split('-w')[0]
+                                if clean_url not in image_urls:
+                                    image_urls.append(clean_url)
 
-        print(f"✅ [2/3] Data extracted! {bedrooms} Bed, {bathrooms} Bath | Land: {land_m2}m2 | Pool: {has_pool}")
+        print(f"✅ [2/3] Data extracted! Found {len(image_urls)} unique photos, {bedrooms} beds, {bathrooms} baths.")
         
-        # --- 4. SECURE IMAGE DOWNLOAD ---
+        # 4. Download images using Native VIP Headers
         pil_images = []
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Referer": "https://www.domain.com.au/",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        }
         
-        for i, url in enumerate(clean_urls[:5]):
+        for i, url in enumerate(image_urls[:5]):
             print(f"   -> Downloading high-res photo {i+1}...") 
             try:
                 img_response = requests.get(url, headers=headers, timeout=15.0)
                 if img_response.status_code == 200:
                     img = Image.open(BytesIO(img_response.content))
                     pil_images.append(img)
-            except Exception as e:
-                print(f"   ❌ Failed to download photo {i+1}: {e}")
+            except Exception:
+                continue
 
         print(f"🎉 [3/3] Successfully downloaded {len(pil_images)} photos.")
 
@@ -100,17 +111,12 @@ def fetch_property_data(property_url: str, apify_api_key: str) -> dict:
             "downloaded_images": pil_images,
             "address": address,
             "asking_price": asking_price,
-            "sold_price": sold_price,
-            "formatted_price": price_str,
+            "formatted_price": formatted_price,
             "bedrooms": bedrooms,
             "bathrooms": bathrooms,
             "carspaces": carspaces,
-            "land_m2": land_m2,
-            "building_m2": building_m2,
-            "has_pool": has_pool,
-            "is_vacant_land": is_vacant_land,
             "error": None
         }
 
     except Exception as e:
-        return {"success": False, "error": f"Apify Connection Error: {str(e)}"}
+        return {"success": False, "error": f"ScraperAPI Connection Error: {str(e)}"}
