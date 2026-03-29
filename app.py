@@ -12,9 +12,9 @@ st.write("AI-Powered Intrinsic Property Valuation")
 # --- SECURE SETTINGS & API VAULT ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
-    apify_api_key = st.secrets["APIFY_API_KEY"]
+    # We no longer need Apify or ScraperAPI!
 except (KeyError, FileNotFoundError):
-    st.error("⚠️ API Keys missing. Please ensure GEMINI_API_KEY and APIFY_API_KEY are configured in your Streamlit secrets.")
+    st.error("⚠️ API Key missing. Please ensure GEMINI_API_KEY is configured in your Streamlit secrets.")
     st.stop()
 
 # --- INPUT UI ---
@@ -31,16 +31,15 @@ if st.button("Run Intrinsic Valuation"):
         st.error("Please enter a valid Domain URL first.")
         st.stop()
         
-    with st.spinner("Apify Cloud running premium extraction..."):
+    with st.spinner("Stealth browser running extraction..."):
         
-        # 1. API EXTRACTION & IMAGE DOWNLOAD (Using Premium Apify Actor)
-        scrape_result = fetch_property_data(property_url, apify_api_key)
+        # 1. API EXTRACTION (Using our own Stealth Browser)
+        scrape_result = fetch_property_data(property_url)
         
         if not scrape_result.get("success"):
             st.error(f"⚠️ Extraction Error: {scrape_result.get('error')}")
             st.stop()
             
-        # Extract the clean data and physical image files
         downloaded_images = scrape_result.get("downloaded_images", [])
         address = scrape_result.get("address", "Unknown Address")
         asking_price = scrape_result.get("asking_price", 0)
@@ -50,26 +49,23 @@ if st.button("Run Intrinsic Valuation"):
         bathrooms = scrape_result.get("bathrooms", 0)
         carspaces = scrape_result.get("carspaces", 0)
 
-        # --- UI UPDATE: DISPLAY PROPERTY HEADER ---
+        # --- UI UPDATE ---
         st.subheader(f"📍 {address}")
         if bedrooms or bathrooms or carspaces:
             st.caption(f"🛏️ {bedrooms} Bed | 🛁 {bathrooms} Bath | 🚗 {carspaces} Car")
             
-        # Handle the "Contact Agent" / "Auction" zero-price edge case safely
         if asking_price == 0:
             st.warning(f"⚠️ Listed as '{asking_price_str}'. Intrinsic Value will calculate, but Hype Premium cannot be determined.")
         
-        # Display the photos straight from memory
         if downloaded_images:
             st.image(downloaded_images[0], caption=f"Primary Image - {address}", use_column_width=True)
-            
             if len(downloaded_images) > 1:
                 with st.expander(f"📸 View all {len(downloaded_images)} extracted photos"):
                     cols = st.columns(len(downloaded_images))
                     for idx, img in enumerate(downloaded_images):
                         cols[idx].image(img, use_column_width=True)
         else:
-            st.warning("No high-res gallery images could be extracted for this property. The AI needs photos to run the valuation.")
+            st.warning("No high-res gallery images could be extracted.")
             st.stop() 
 
     with st.spinner("AI Inspector scanning interior condition..."):
@@ -119,14 +115,8 @@ if st.button("Run Intrinsic Valuation"):
             else:
                  st.metric(label="Hype Premium", value="N/A (Auction)")
         
-        # --- THE AI DIAGNOSTICS & VERIFICATION ---
         st.markdown("---")
         st.write("### 🤖 AI Inspector Notes")
         st.info(reasoning)
-        
         if needs_reno:
-            st.warning("🛠️ Flagged for Cosmetic Arbitrage: Property requires renovation. Factor into holding costs.")
-            
-        st.markdown("---")
-        st.write("### 🔍 System Verification")
-        st.success(f"**Pipeline Active:** API securely extracted and AI analyzed {len(downloaded_images)} photos.")
+            st.warning("🛠️ Flagged for Cosmetic Arbitrage: Property requires renovation.")
