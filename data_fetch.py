@@ -3,10 +3,9 @@ from bs4 import BeautifulSoup
 import re
 
 def fetch_property_data(property_url: str) -> dict:
-    print(f"🚀 [1/2] Launching Stealth Chrome (Targeting SEO Meta Tags)...")
+    print(f"🚀 [1/2] Launching Stealth Chrome (Targeting Title Tags)...")
     
     try:
-        # 1. Grab raw HTML directly
         response = stealth_requests.get(property_url, impersonate="chrome110", timeout=20.0)
         
         if response.status_code != 200:
@@ -15,45 +14,43 @@ def fetch_property_data(property_url: str) -> dict:
         html_text = response.text
         soup = BeautifulSoup(html_text, 'html.parser')
         
-        # --- 1. THE ABSOLUTE TRUTH: SEO Meta Tags ---
-        # Google requires these to describe the main house, preventing neighbor-scraping.
+        # --- 1. THE ABSOLUTE TRUTH: Title Tag ---
+        title_text = soup.title.string.lower() if soup.title and soup.title.string else ""
+        
         meta_desc = soup.find('meta', attrs={'name': 'description'})
         desc_text = meta_desc['content'].lower() if meta_desc else ""
         
-        beds_match = re.search(r'(\d+)\s+bed', desc_text)
-        bedrooms = int(beds_match.group(1)) if beds_match else 0
-        
-        baths_match = re.search(r'(\d+)\s+bath', desc_text)
-        bathrooms = int(baths_match.group(1)) if baths_match else 0
-        
-        cars_match = re.search(r'(\d+)\s+(?:car|parking)', desc_text)
-        carspaces = int(cars_match.group(1)) if cars_match else 0
+        # Helper function to check Title first, then Description
+        def get_metric(pattern, primary_text, secondary_text):
+            match = re.search(pattern, primary_text)
+            if match: return int(match.group(1))
+            match = re.search(pattern, secondary_text)
+            if match: return int(match.group(1))
+            return 0
+
+        bedrooms = get_metric(r'(\d+)\s*bed', title_text, desc_text)
+        bathrooms = get_metric(r'(\d+)\s*bath', title_text, desc_text)
+        carspaces = get_metric(r'(\d+)\s*(?:car|parking)', title_text, desc_text)
         
         # --- 2. THE EXACT ADDRESS ---
         address = "Unknown Address"
         if soup.title and soup.title.string:
-            # Example: "211 Fullers Road, Chatswood NSW 2067 - 4 beds 1 bath | Domain"
             address = soup.title.string.split('-')[0].split('|')[0].strip()
             
         # --- 3. THE PRICE ---
-        # Domain puts the main price in a specific UI element at the top
         price_elem = soup.find(attrs={"data-testid": "listing-details__summary-title"})
         formatted_price = price_elem.text.strip() if price_elem else "Contact Agent"
         asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
         
         # --- 4. LAND SIZE & HISTORY (Quarantining the Neighbors) ---
-        # We split the raw text at the word "similarProperties" to completely destroy 
-        # the bottom half of the JSON where the neighbors are stored.
         safe_html = html_text.split('"similarProperties"')[0]
         
-        # Fallback for price if it wasn't in the UI element
         if asking_price == 0:
             price_match = re.search(r'"displayPrice"\s*:\s*"([^"]+)"', safe_html, re.IGNORECASE)
             if price_match:
                 formatted_price = price_match.group(1)
                 asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
 
-        # Hunt for Land Size in the safe zone
         land_m2 = 0
         land_match = re.search(r'"landArea"\s*:\s*\{\s*"value"\s*:\s*([\d\.]+)', safe_html, re.IGNORECASE)
         if land_match:
@@ -63,7 +60,6 @@ def fetch_property_data(property_url: str) -> dict:
             if land_match_alt:
                 land_m2 = float(land_match_alt.group(1))
                 
-        # Hunt for Sold History in the safe zone
         sold_records = []
         sold_matches = re.finditer(r'"date"\s*:\s*"([^"]+)".*?"price"\s*:\s*(\d+).*?"category"\s*:\s*"sold"', safe_html, re.IGNORECASE)
         for match in sold_matches:
@@ -74,8 +70,6 @@ def fetch_property_data(property_url: str) -> dict:
             sold_date_match = re.search(r'"soldDate"\s*:\s*"([^"]+)"', safe_html, re.IGNORECASE)
             if sold_price_match and sold_date_match:
                 sold_records.append({"date": sold_date_match.group(1), "price": int(sold_price_match.group(1))})
-
-        print(f"✅ [2/2] Data extracted! {bedrooms} Bed, {bathrooms} Bath, {land_m2}m2. Found {len(sold_records)} sold records.")
 
         return {
             "success": True,
