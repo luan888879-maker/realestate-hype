@@ -89,18 +89,30 @@ def fetch_property_data(property_url: str, scraper_api_key: str) -> dict:
         # 4. Proxy Download Images (Bypassing Datacenter IP Blocks)
         pil_images = []
         
+        # THE FIX: We MUST give the proxy the VIP ticket, and tell it NOT to throw it away
+        img_headers = {
+            "Referer": "https://www.domain.com.au/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        
         for i, url in enumerate(image_urls[:5]):
             print(f"   -> Routing photo {i+1} through Residential Proxy...") 
             try:
-                # THE FIX: Instruct ScraperAPI to return binary image bytes, not text
+                # Instruct ScraperAPI to use Residential IPs AND keep our headers
                 proxy_params = {
                     "api_key": scraper_api_key, 
                     "url": url, 
-                    "country_code": "au",
-                    "binary_target": "true" 
+                    "premium": "true",
+                    "keep_headers": "true" 
                 }
                 
-                img_response = standard_requests.get("http://api.scraperapi.com", params=proxy_params, timeout=25.0)
+                # Notice we pass the img_headers here!
+                img_response = standard_requests.get(
+                    "http://api.scraperapi.com", 
+                    params=proxy_params, 
+                    headers=img_headers,
+                    timeout=30.0
+                )
                 
                 if img_response.status_code == 200:
                     img = Image.open(BytesIO(img_response.content))
