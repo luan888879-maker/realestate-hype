@@ -1,24 +1,9 @@
 from curl_cffi import requests as stealth_requests
 from bs4 import BeautifulSoup
-import json
 import re
 
-def extract_complex_data(obj, target_key):
-    """Recursively hunts for a key, but ONLY returns it if it is a Dictionary or List."""
-    if isinstance(obj, dict):
-        if target_key.lower() in [k.lower() for k in obj.keys()] and isinstance(obj.get(target_key), (dict, list)):
-            return obj.get(target_key)
-        for k, v in obj.items():
-            result = extract_complex_data(v, target_key)
-            if result is not None: return result
-    elif isinstance(obj, list):
-        for item in obj:
-            result = extract_complex_data(item, target_key)
-            if result is not None: return result
-    return None
-
 def fetch_property_data(property_url: str) -> dict:
-    print(f"🚀 [1/2] Launching Stealth Chrome for Data Extraction...")
+    print(f"🚀 [1/2] Launching Stealth Chrome for Brute-Force Extraction...")
     
     try:
         # 1. Grab raw HTML directly
@@ -27,55 +12,57 @@ def fetch_property_data(property_url: str) -> dict:
         if response.status_code != 200:
             return {"success": False, "error": f"Domain blocked the stealth request (Status {response.status_code})."}
             
-        soup = BeautifulSoup(response.text, 'html.parser')
-        next_data_script = soup.find('script', id='__NEXT_DATA__')
+        html_text = response.text
         
-        if not next_data_script:
-            return {"success": False, "error": "HTML loaded, but Domain JSON data not found."}
-            
-        data = json.loads(next_data_script.string)
+        # --- BRUTE-FORCE REGEX HUNTER ---
+        # We ignore the JSON tree and search the raw code directly.
         
-        # 2. Extract Core Data
-        address_parts = extract_complex_data(data, 'addressParts')
-        address = address_parts.get('displayAddress', 'Unknown Address') if isinstance(address_parts, dict) else 'Unknown Address'
+        # 1. Core Specs
+        beds_match = re.search(r'"beds"\s*:\s*(\d+)', html_text, re.IGNORECASE)
+        bedrooms = int(beds_match.group(1)) if beds_match else 0
         
-        price_details = extract_complex_data(data, 'priceDetails')
-        formatted_price = price_details.get('displayPrice', 'Contact Agent') if isinstance(price_details, dict) else 'Contact Agent'
+        baths_match = re.search(r'"baths"\s*:\s*(\d+)', html_text, re.IGNORECASE)
+        bathrooms = int(baths_match.group(1)) if baths_match else 0
+        
+        car_match = re.search(r'"(?:parking|cars)"\s*:\s*(\d+)', html_text, re.IGNORECASE)
+        carspaces = int(car_match.group(1)) if car_match else 0
+        
+        # 2. Price
+        price_match = re.search(r'"displayPrice"\s*:\s*"([^"]+)"', html_text, re.IGNORECASE)
+        formatted_price = price_match.group(1) if price_match else 'Contact Agent'
         asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
         
-        features = extract_complex_data(data, 'features') or extract_complex_data(data, 'propertyFeatures')
-        bedrooms = features.get('beds', 0) if isinstance(features, dict) else 0
-        bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
-        carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
+        # 3. Address
+        addr_match = re.search(r'"(?:displayAddress|streetAddress)"\s*:\s*"([^"]+)"', html_text, re.IGNORECASE)
+        address = addr_match.group(1) if addr_match else 'Unknown Address'
         
-        # --- NEW: ADVANCED METRICS & HISTORY HUNTER ---
+        if address == 'Unknown Address':
+            soup = BeautifulSoup(html_text, 'html.parser')
+            h1_tag = soup.find('h1')
+            if h1_tag:
+                address = h1_tag.text.strip()
         
-        # Hunt for Land Size
-        land_area = extract_complex_data(data, 'landArea') or extract_complex_data(data, 'areaSize')
-        land_m2 = land_area.get('value', 0) if isinstance(land_area, dict) else 0
-        
-        # Hunt for Previous Sold History
+        # 4. Land Size
+        land_m2 = 0
+        land_match = re.search(r'"landArea"\s*:\s*\{\s*"value"\s*:\s*([\d\.]+)', html_text, re.IGNORECASE)
+        if land_match:
+            land_m2 = float(land_match.group(1))
+        else:
+            land_match_alt = re.search(r'"areaSize"\s*:\s*(\d+)', html_text, re.IGNORECASE)
+            if land_match_alt:
+                land_m2 = float(land_match_alt.group(1))
+                
+        # 5. Sold History
         sold_records = []
-        history_node = extract_complex_data(data, 'propertyHistory') or extract_complex_data(data, 'salesHistory')
-        
-        # If we find a history array, look for 'sold' events
-        if isinstance(history_node, dict):
-            timeline = history_node.get('timeline', []) or history_node.get('events', [])
-            for event in timeline:
-                if isinstance(event, dict) and event.get('category', '').lower() == 'sold':
-                    date = event.get('date', 'Unknown Date')
-                    price = event.get('price', 0)
-                    if price > 0:
-                        sold_records.append({"date": date, "price": price})
-                        
-        # Fallback if history is structured differently
+        sold_matches = re.finditer(r'"date"\s*:\s*"([^"]+)".*?"price"\s*:\s*(\d+).*?"category"\s*:\s*"sold"', html_text, re.IGNORECASE)
+        for match in sold_matches:
+            sold_records.append({"date": match.group(1), "price": int(match.group(2))})
+            
         if not sold_records:
-            sold_details = extract_complex_data(data, 'soldDetails')
-            if isinstance(sold_details, dict):
-                sold_price = sold_details.get('soldPrice', 0)
-                sold_date = sold_details.get('soldDate', 'Unknown Date')
-                if sold_price > 0:
-                     sold_records.append({"date": sold_date, "price": sold_price})
+            sold_price_match = re.search(r'"soldPrice"\s*:\s*(\d+)', html_text, re.IGNORECASE)
+            sold_date_match = re.search(r'"soldDate"\s*:\s*"([^"]+)"', html_text, re.IGNORECASE)
+            if sold_price_match and sold_date_match:
+                sold_records.append({"date": sold_date_match.group(1), "price": int(sold_price_match.group(1))})
 
         print(f"✅ [2/2] Data extracted! {bedrooms} Bed, {bathrooms} Bath, {land_m2}m2. Found {len(sold_records)} sold records.")
 
