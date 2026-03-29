@@ -1,30 +1,28 @@
 from curl_cffi import requests as stealth_requests
 from bs4 import BeautifulSoup
-from PIL import Image
-from io import BytesIO
 import json
 import re
 
 def extract_complex_data(obj, target_key):
+    """Recursively hunts for a key, but ONLY returns it if it is a Dictionary or List."""
     if isinstance(obj, dict):
-        if target_key in obj and isinstance(obj[target_key], (dict, list)):
-            return obj[target_key]
+        if target_key.lower() in [k.lower() for k in obj.keys()] and isinstance(obj.get(target_key), (dict, list)):
+            return obj.get(target_key)
         for k, v in obj.items():
             result = extract_complex_data(v, target_key)
-            if result != None: return result
+            if result is not None: return result
     elif isinstance(obj, list):
         for item in obj:
             result = extract_complex_data(item, target_key)
-            if result != None: return result
+            if result is not None: return result
     return None
 
 def fetch_property_data(property_url: str) -> dict:
-    print(f"🚀 [1/3] Launching Stealth Chrome Browser...")
-    
-    session = stealth_requests.Session(impersonate="chrome110")
+    print(f"🚀 [1/2] Launching Stealth Chrome for Data Extraction...")
     
     try:
-        response = session.get(property_url, timeout=30.0)
+        # 1. Grab raw HTML directly
+        response = stealth_requests.get(property_url, impersonate="chrome110", timeout=20.0)
         
         if response.status_code != 200:
             return {"success": False, "error": f"Domain blocked the stealth request (Status {response.status_code})."}
@@ -37,6 +35,7 @@ def fetch_property_data(property_url: str) -> dict:
             
         data = json.loads(next_data_script.string)
         
+        # 2. Extract Core Data
         address_parts = extract_complex_data(data, 'addressParts')
         address = address_parts.get('displayAddress', 'Unknown Address') if isinstance(address_parts, dict) else 'Unknown Address'
         
@@ -49,72 +48,49 @@ def fetch_property_data(property_url: str) -> dict:
         bathrooms = features.get('baths', 0) if isinstance(features, dict) else 0
         carspaces = features.get('parking', 0) if isinstance(features, dict) else 0
         
-        # --- 3. THE FIX: EXACT URL HUNTER ---
-        image_urls = []
-        media_folders = []
+        # --- NEW: ADVANCED METRICS & HISTORY HUNTER ---
         
-        def find_media_folders(obj):
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    if k.lower() == 'media' and isinstance(v, list):
-                        media_folders.append(v)
-                    else: find_media_folders(v)
-            elif isinstance(obj, list):
-                for item in obj: find_media_folders(item)
-                    
-        find_media_folders(data)
+        # Hunt for Land Size
+        land_area = extract_complex_data(data, 'landArea') or extract_complex_data(data, 'areaSize')
+        land_m2 = land_area.get('value', 0) if isinstance(land_area, dict) else 0
         
-        for folder in media_folders:
-            for item in folder:
-                if isinstance(item, dict):
-                    item_type = item.get('type', '').lower()
-                    if item_type in ['image', 'photograph', 'photo']:
-                        url = item.get('url')
-                        if url and url.startswith('http'):
-                            lower_url = url.lower()
-                            if 'floorplan' not in lower_url and 'profile' not in lower_url:
-                                # NO MORE CHOPPING. KEEP THE URL INTACT.
-                                clean_url = url.replace('\\u002F', '/').replace('\\', '')
-                                if clean_url not in image_urls:
-                                    image_urls.append(clean_url)
+        # Hunt for Previous Sold History
+        sold_records = []
+        history_node = extract_complex_data(data, 'propertyHistory') or extract_complex_data(data, 'salesHistory')
+        
+        # If we find a history array, look for 'sold' events
+        if isinstance(history_node, dict):
+            timeline = history_node.get('timeline', []) or history_node.get('events', [])
+            for event in timeline:
+                if isinstance(event, dict) and event.get('category', '').lower() == 'sold':
+                    date = event.get('date', 'Unknown Date')
+                    price = event.get('price', 0)
+                    if price > 0:
+                        sold_records.append({"date": date, "price": price})
+                        
+        # Fallback if history is structured differently
+        if not sold_records:
+            sold_details = extract_complex_data(data, 'soldDetails')
+            if isinstance(sold_details, dict):
+                sold_price = sold_details.get('soldPrice', 0)
+                sold_date = sold_details.get('soldDate', 'Unknown Date')
+                if sold_price > 0:
+                     sold_records.append({"date": sold_date, "price": sold_price})
 
-        print(f"✅ [2/3] Data extracted! Found {len(image_urls)} true photos.")
-        
-        # --- 4. DIRECT DOWNLOAD ---
-        pil_images = []
-        img_headers = {
-            "Referer": "https://www.domain.com.au/",
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-        }
-        
-        for i, url in enumerate(image_urls[:5]):
-            print(f"   -> Downloading high-res photo {i+1}...") 
-            try:
-                img_response = session.get(url, headers=img_headers, timeout=15.0)
-                if img_response.status_code == 200:
-                    img = Image.open(BytesIO(img_response.content))
-                    pil_images.append(img)
-                else:
-                    print(f"   ❌ CDN Blocked: Status {img_response.status_code}")
-            except Exception as e:
-                print(f"   ❌ Connection error on photo {i+1}: {e}")
-
-        if not pil_images:
-             return {"success": False, "error": "Found the URLs, but CDN download failed. Check terminal logs."}
-
-        print(f"🎉 [3/3] Successfully downloaded {len(pil_images)} photos.")
+        print(f"✅ [2/2] Data extracted! {bedrooms} Bed, {bathrooms} Bath, {land_m2}m2. Found {len(sold_records)} sold records.")
 
         return {
             "success": True,
-            "downloaded_images": pil_images,
             "address": address,
             "asking_price": asking_price,
             "formatted_price": formatted_price,
             "bedrooms": bedrooms,
             "bathrooms": bathrooms,
             "carspaces": carspaces,
+            "land_m2": land_m2,
+            "sold_records": sold_records,
             "error": None
         }
 
     except Exception as e:
-        return {"success": False, "error": f"Connection Error: {str(e)}"}
+        return {"success": False, "error": f"Extraction Error: {str(e)}"}
