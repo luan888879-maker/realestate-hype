@@ -22,15 +22,14 @@ def extract_complex_data(obj, target_key):
     return None
 
 def fetch_property_data(property_url: str) -> dict:
-    print(f"🚀 [1/3] Launching Stealth Chrome Browser (Bypassing Cloudflare)...")
+    print(f"🚀 [1/3] Launching Stealth Chrome Browser with Session Memory...")
+    
+    # NEW: Create a Session so cookies and the Chrome disguise persist across all requests
+    session = stealth_requests.Session(impersonate="chrome110")
     
     try:
-        # 1. Grab raw HTML directly using a spoofed Chrome fingerprint
-        response = stealth_requests.get(
-            property_url, 
-            impersonate="chrome110", 
-            timeout=30.0
-        )
+        # 1. Grab raw HTML directly
+        response = session.get(property_url, timeout=30.0)
         
         if response.status_code != 200:
             return {"success": False, "error": f"Domain blocked the stealth request (Status {response.status_code})."}
@@ -89,18 +88,21 @@ def fetch_property_data(property_url: str) -> dict:
 
         print(f"✅ [2/3] Data extracted! Found {len(image_urls)} unique photos.")
         
-        # 4. Download Images using the exact same Stealth Chrome browser
+        # 4. Download Images using the exact same Session and VIP Headers
         pil_images = []
+        
+        # NEW: Provide the exact headers the CDN expects to see from a real browser
+        img_headers = {
+            "Referer": "https://www.domain.com.au/",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        }
         
         for i, url in enumerate(image_urls[:5]):
             print(f"   -> Stealth downloading high-res photo {i+1}...") 
             try:
-                # We use stealth_requests here too, to bypass the AWS CDN block!
-                img_response = stealth_requests.get(
-                    url, 
-                    impersonate="chrome110", 
-                    timeout=15.0
-                )
+                # NEW: Use session.get() instead of stealth_requests.get()
+                img_response = session.get(url, headers=img_headers, timeout=15.0)
+                
                 if img_response.status_code == 200:
                     img = Image.open(BytesIO(img_response.content))
                     pil_images.append(img)
@@ -111,7 +113,7 @@ def fetch_property_data(property_url: str) -> dict:
                 continue
 
         if not pil_images:
-             return {"success": False, "error": "Stealth network failed to download the images."}
+             return {"success": False, "error": "Stealth network found the URLs, but the CDN blocked the image download."}
 
         print(f"🎉 [3/3] Successfully downloaded {len(pil_images)} photos into memory.")
 
