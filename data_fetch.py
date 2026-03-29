@@ -3,33 +3,6 @@ from bs4 import BeautifulSoup
 import json
 import re
 
-def purge_neighbors(obj):
-    """Recursively destroys any data related to neighbors or recommendations."""
-    bad_keys = ['similarproperties', 'recommendedproperties', 'nearbyproperties']
-    if isinstance(obj, dict):
-        keys_to_delete = [k for k in obj.keys() if str(k).lower() in bad_keys]
-        for k in keys_to_delete:
-            del obj[k]
-        for v in obj.values():
-            purge_neighbors(v)
-    elif isinstance(obj, list):
-        for item in obj:
-            purge_neighbors(item)
-
-def hunt_for_dict_with_keys(obj, required_keys):
-    """Finds the first dictionary containing ALL the requested keys."""
-    if isinstance(obj, dict):
-        if all(k in obj for k in required_keys):
-            return obj
-        for v in obj.values():
-            res = hunt_for_dict_with_keys(v, required_keys)
-            if res: return res
-    elif isinstance(obj, list):
-        for item in obj:
-            res = hunt_for_dict_with_keys(item, required_keys)
-            if res: return res
-    return {}
-
 def hunt_for_key(obj, target_key):
     """Finds the first value for a specific key anywhere in the data."""
     if isinstance(obj, dict):
@@ -46,70 +19,112 @@ def hunt_for_key(obj, target_key):
     return None
 
 def fetch_property_data(property_url: str) -> dict:
-    print(f"🚀 [1/2] Launching Stealth Chrome (The JSON Quarantine Method)...")
+    print(f"🚀 [1/2] Launching Stealth Chrome (The ID Lock-On Method)...")
     
     try:
-        # 1. Grab raw HTML directly
+        # --- 1. EXTRACT THE TARGET ID ---
+        listing_id_match = re.search(r'-(\d+)/?$', property_url)
+        listing_id = listing_id_match.group(1) if listing_id_match else None
+        
+        # 2. Grab raw HTML directly
         response = stealth_requests.get(property_url, impersonate="chrome110", timeout=20.0)
         
         if response.status_code != 200:
             return {"success": False, "error": f"Domain blocked the stealth request (Status {response.status_code})."}
             
         soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # --- 3. THE ABSOLUTE TRUTH: Title Tag ---
+        title_text = soup.title.string.lower() if soup.title and soup.title.string else ""
+        
+        # Extract Address directly from the browser tab title
+        address = soup.title.string.split('-')[0].split('|')[0].strip() if soup.title else "Unknown Address"
+        
+        # Google forces agents to put the real beds/baths in the title
+        beds_match = re.search(r'(\d+)\s*bed', title_text)
+        bedrooms = int(beds_match.group(1)) if beds_match else 0
+        
+        baths_match = re.search(r'(\d+)\s*bath', title_text)
+        bathrooms = int(baths_match.group(1)) if baths_match else 0
+        
+        cars_match = re.search(r'(\d+)\s*(?:car|parking)', title_text)
+        carspaces = int(cars_match.group(1)) if cars_match else 0
+        
+        # --- 4. JSON ID LOCK-ON FOR MARKET METRICS ---
         next_data_script = soup.find('script', id='__NEXT_DATA__')
         
-        if not next_data_script:
-            return {"success": False, "error": "HTML loaded, but Domain JSON data not found."}
-            
-        # Load the raw JSON into memory
-        data = json.loads(next_data_script.string)
-        
-        # 🛑 THE FIX: Destroy the neighbors before searching
-        purge_neighbors(data)
-        
-        # 1. CORE SPECS (Find the single dictionary that contains both beds AND baths)
-        features = hunt_for_dict_with_keys(data, ['beds', 'baths'])
-        bedrooms = int(features.get('beds', 0))
-        bathrooms = int(features.get('baths', 0))
-        carspaces = int(features.get('parking', 0) or features.get('cars', 0))
-        
-        # 2. ADDRESS
-        address_dict = hunt_for_dict_with_keys(data, ['displayAddress'])
-        address = address_dict.get('displayAddress', 'Unknown Address')
-        
-        # 3. PRICE
-        price_dict = hunt_for_dict_with_keys(data, ['displayPrice'])
-        formatted_price = price_dict.get('displayPrice', 'Contact Agent')
-        asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
-        
-        # 4. LAND SIZE
+        asking_price = 0
+        formatted_price = "Contact Agent"
         land_m2 = 0
-        land_area = hunt_for_key(data, 'landArea') or hunt_for_key(data, 'areaSize')
-        if isinstance(land_area, dict) and 'value' in land_area:
-            land_m2 = float(land_area.get('value', 0))
-        elif isinstance(land_area, (int, float)):
-            land_m2 = float(land_area)
-            
-        # 5. PROPERTY HISTORY
         sold_records = []
-        history_timeline = hunt_for_key(data, 'timeline') or hunt_for_key(data, 'events')
         
-        if isinstance(history_timeline, list):
-            for event in history_timeline:
-                if isinstance(event, dict) and event.get('category', '').lower() == 'sold':
-                    date = event.get('date', 'Unknown Date')
-                    price = event.get('price', 0)
+        if next_data_script:
+            data = json.loads(next_data_script.string)
+            
+            main_property_data = {}
+            
+            # Recursive function to find the exact dictionary belonging to our URL
+            def find_exact_listing(obj):
+                nonlocal main_property_data
+                if isinstance(obj, dict):
+                    # Check if this dictionary represents our exact house
+                    if str(obj.get('id')) == listing_id or str(obj.get('listingId')) == listing_id:
+                        # Grab it if it has the juicy market data
+                        if 'priceDetails' in obj or 'propertyDetails' in obj:
+                            main_property_data = obj
+                            return True
+                    for v in obj.values():
+                        if find_exact_listing(v): return True
+                elif isinstance(obj, list):
+                    for item in obj:
+                        if find_exact_listing(item): return True
+                return False
+
+            if listing_id:
+                find_exact_listing(data)
+                
+            # If we locked on, we ONLY search inside main_property_data. 
+            # This completely ignores your past search filters!
+            search_target = main_property_data if main_property_data else data
+            
+            # Get Price
+            price_details = hunt_for_key(search_target, 'priceDetails')
+            if isinstance(price_details, dict):
+                formatted_price = price_details.get('displayPrice', 'Contact Agent')
+                asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
+                
+            # Get Land
+            land_area = hunt_for_key(search_target, 'landArea') or hunt_for_key(search_target, 'areaSize')
+            if isinstance(land_area, dict) and 'value' in land_area:
+                land_m2 = float(land_area.get('value', 0))
+            elif isinstance(land_area, (int, float)):
+                land_m2 = float(land_area)
+                
+            # Get History
+            history_timeline = hunt_for_key(search_target, 'timeline') or hunt_for_key(search_target, 'events')
+            if isinstance(history_timeline, list):
+                for event in history_timeline:
+                    if isinstance(event, dict) and event.get('category', '').lower() == 'sold':
+                        date = event.get('date', 'Unknown Date')
+                        price = event.get('price', 0)
+                        if price > 0:
+                            sold_records.append({"date": date, "price": price})
+                            
+            if not sold_records:
+                sold_details = hunt_for_key(search_target, 'soldDetails')
+                if isinstance(sold_details, dict):
+                    price = sold_details.get('soldPrice', 0)
+                    date = sold_details.get('soldDate', 'Unknown Date')
                     if price > 0:
                         sold_records.append({"date": date, "price": price})
-                        
-        # Fallback for sold history
-        if not sold_records:
-            sold_details = hunt_for_key(data, 'soldDetails')
-            if isinstance(sold_details, dict):
-                price = sold_details.get('soldPrice', 0)
-                date = sold_details.get('soldDate', 'Unknown Date')
-                if price > 0:
-                    sold_records.append({"date": date, "price": price})
+
+        # Fallback just in case the title tag missed the beds/baths
+        if bedrooms == 0 and main_property_data:
+            features = hunt_for_key(main_property_data, 'features') or hunt_for_key(main_property_data, 'propertyFeatures')
+            if isinstance(features, dict):
+                bedrooms = int(features.get('beds', 0))
+                bathrooms = int(features.get('baths', 0))
+                carspaces = int(features.get('parking', 0) or features.get('cars', 0))
 
         print(f"✅ [2/2] Data extracted! {bedrooms} Bed, {bathrooms} Bath, {land_m2}m2. Found {len(sold_records)} sold records.")
 
