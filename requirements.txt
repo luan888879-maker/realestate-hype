@@ -4,3 +4,4 @@ google-genai
 Pillow
 apify-client
 beautifulsoup4
+curl_cffi
