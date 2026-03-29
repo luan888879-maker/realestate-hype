@@ -1,75 +1,117 @@
 from curl_cffi import requests as stealth_requests
 from bs4 import BeautifulSoup
+import json
 import re
 
+def purge_neighbors(obj):
+    """Recursively destroys any data related to neighbors or recommendations."""
+    bad_keys = ['similarproperties', 'recommendedproperties', 'nearbyproperties']
+    if isinstance(obj, dict):
+        keys_to_delete = [k for k in obj.keys() if str(k).lower() in bad_keys]
+        for k in keys_to_delete:
+            del obj[k]
+        for v in obj.values():
+            purge_neighbors(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            purge_neighbors(item)
+
+def hunt_for_dict_with_keys(obj, required_keys):
+    """Finds the first dictionary containing ALL the requested keys."""
+    if isinstance(obj, dict):
+        if all(k in obj for k in required_keys):
+            return obj
+        for v in obj.values():
+            res = hunt_for_dict_with_keys(v, required_keys)
+            if res: return res
+    elif isinstance(obj, list):
+        for item in obj:
+            res = hunt_for_dict_with_keys(item, required_keys)
+            if res: return res
+    return {}
+
+def hunt_for_key(obj, target_key):
+    """Finds the first value for a specific key anywhere in the data."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() == target_key.lower() and v is not None:
+                return v
+        for v in obj.values():
+            res = hunt_for_key(v, target_key)
+            if res is not None: return res
+    elif isinstance(obj, list):
+        for item in obj:
+            res = hunt_for_key(item, target_key)
+            if res is not None: return res
+    return None
+
 def fetch_property_data(property_url: str) -> dict:
-    print(f"🚀 [1/2] Launching Stealth Chrome (Targeting Title Tags)...")
+    print(f"🚀 [1/2] Launching Stealth Chrome (The JSON Quarantine Method)...")
     
     try:
+        # 1. Grab raw HTML directly
         response = stealth_requests.get(property_url, impersonate="chrome110", timeout=20.0)
         
         if response.status_code != 200:
             return {"success": False, "error": f"Domain blocked the stealth request (Status {response.status_code})."}
             
-        html_text = response.text
-        soup = BeautifulSoup(html_text, 'html.parser')
+        soup = BeautifulSoup(response.text, 'html.parser')
+        next_data_script = soup.find('script', id='__NEXT_DATA__')
         
-        # --- 1. THE ABSOLUTE TRUTH: Title Tag ---
-        title_text = soup.title.string.lower() if soup.title and soup.title.string else ""
-        
-        meta_desc = soup.find('meta', attrs={'name': 'description'})
-        desc_text = meta_desc['content'].lower() if meta_desc else ""
-        
-        # Helper function to check Title first, then Description
-        def get_metric(pattern, primary_text, secondary_text):
-            match = re.search(pattern, primary_text)
-            if match: return int(match.group(1))
-            match = re.search(pattern, secondary_text)
-            if match: return int(match.group(1))
-            return 0
-
-        bedrooms = get_metric(r'(\d+)\s*bed', title_text, desc_text)
-        bathrooms = get_metric(r'(\d+)\s*bath', title_text, desc_text)
-        carspaces = get_metric(r'(\d+)\s*(?:car|parking)', title_text, desc_text)
-        
-        # --- 2. THE EXACT ADDRESS ---
-        address = "Unknown Address"
-        if soup.title and soup.title.string:
-            address = soup.title.string.split('-')[0].split('|')[0].strip()
+        if not next_data_script:
+            return {"success": False, "error": "HTML loaded, but Domain JSON data not found."}
             
-        # --- 3. THE PRICE ---
-        price_elem = soup.find(attrs={"data-testid": "listing-details__summary-title"})
-        formatted_price = price_elem.text.strip() if price_elem else "Contact Agent"
+        # Load the raw JSON into memory
+        data = json.loads(next_data_script.string)
+        
+        # 🛑 THE FIX: Destroy the neighbors before searching
+        purge_neighbors(data)
+        
+        # 1. CORE SPECS (Find the single dictionary that contains both beds AND baths)
+        features = hunt_for_dict_with_keys(data, ['beds', 'baths'])
+        bedrooms = int(features.get('beds', 0))
+        bathrooms = int(features.get('baths', 0))
+        carspaces = int(features.get('parking', 0) or features.get('cars', 0))
+        
+        # 2. ADDRESS
+        address_dict = hunt_for_dict_with_keys(data, ['displayAddress'])
+        address = address_dict.get('displayAddress', 'Unknown Address')
+        
+        # 3. PRICE
+        price_dict = hunt_for_dict_with_keys(data, ['displayPrice'])
+        formatted_price = price_dict.get('displayPrice', 'Contact Agent')
         asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
         
-        # --- 4. LAND SIZE & HISTORY (Quarantining the Neighbors) ---
-        safe_html = html_text.split('"similarProperties"')[0]
-        
-        if asking_price == 0:
-            price_match = re.search(r'"displayPrice"\s*:\s*"([^"]+)"', safe_html, re.IGNORECASE)
-            if price_match:
-                formatted_price = price_match.group(1)
-                asking_price = int(re.sub(r'[^\d]', '', formatted_price)) if re.sub(r'[^\d]', '', formatted_price) else 0
-
+        # 4. LAND SIZE
         land_m2 = 0
-        land_match = re.search(r'"landArea"\s*:\s*\{\s*"value"\s*:\s*([\d\.]+)', safe_html, re.IGNORECASE)
-        if land_match:
-            land_m2 = float(land_match.group(1))
-        else:
-            land_match_alt = re.search(r'"areaSize"\s*:\s*(\d+)', safe_html, re.IGNORECASE)
-            if land_match_alt:
-                land_m2 = float(land_match_alt.group(1))
-                
-        sold_records = []
-        sold_matches = re.finditer(r'"date"\s*:\s*"([^"]+)".*?"price"\s*:\s*(\d+).*?"category"\s*:\s*"sold"', safe_html, re.IGNORECASE)
-        for match in sold_matches:
-            sold_records.append({"date": match.group(1), "price": int(match.group(2))})
+        land_area = hunt_for_key(data, 'landArea') or hunt_for_key(data, 'areaSize')
+        if isinstance(land_area, dict) and 'value' in land_area:
+            land_m2 = float(land_area.get('value', 0))
+        elif isinstance(land_area, (int, float)):
+            land_m2 = float(land_area)
             
+        # 5. PROPERTY HISTORY
+        sold_records = []
+        history_timeline = hunt_for_key(data, 'timeline') or hunt_for_key(data, 'events')
+        
+        if isinstance(history_timeline, list):
+            for event in history_timeline:
+                if isinstance(event, dict) and event.get('category', '').lower() == 'sold':
+                    date = event.get('date', 'Unknown Date')
+                    price = event.get('price', 0)
+                    if price > 0:
+                        sold_records.append({"date": date, "price": price})
+                        
+        # Fallback for sold history
         if not sold_records:
-            sold_price_match = re.search(r'"soldPrice"\s*:\s*(\d+)', safe_html, re.IGNORECASE)
-            sold_date_match = re.search(r'"soldDate"\s*:\s*"([^"]+)"', safe_html, re.IGNORECASE)
-            if sold_price_match and sold_date_match:
-                sold_records.append({"date": sold_date_match.group(1), "price": int(sold_price_match.group(1))})
+            sold_details = hunt_for_key(data, 'soldDetails')
+            if isinstance(sold_details, dict):
+                price = sold_details.get('soldPrice', 0)
+                date = sold_details.get('soldDate', 'Unknown Date')
+                if price > 0:
+                    sold_records.append({"date": date, "price": price})
+
+        print(f"✅ [2/2] Data extracted! {bedrooms} Bed, {bathrooms} Bath, {land_m2}m2. Found {len(sold_records)} sold records.")
 
         return {
             "success": True,
